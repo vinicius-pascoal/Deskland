@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deskland · 复古终端（原型）</title>
+<!--
+  Deskland · 复古终端主题（荧光屏终端；Canvas 2D）
+  - 绿色 / 琥珀 / 冰蓝荧光，扫描线、暗角和一点辉光
+  - 屏幕分成几个 tmux 风格的窗格，各自跑着虚构的命令：安装依赖、编译、测试（偶尔失败再修好）、git、本地服务……
+    偶尔出现 ASCII 画；底部是带时钟的状态栏
+  - 每个图标在一个 ASCII 窗口里（┌─┐ 边框），挨着的图标合成一个窗口，日志在窗口外面滚动
+  - 日志都是编出来的，不读取任何真实文件或命令输出
+  性能：每个窗格的文字画在自己的画布上，来一行新的就把整张往上挪一行（drawImage），只画新的这一行；
+  图标窗口、扫描线、暗角合成一张静态图层；每帧贴几张图，再画正在打的那一行和状态栏
+-->
+<style>
+  :root { --taskbar: 48px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #030d07; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif; }
+  #art { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #desktop { position: fixed; left: 0; top: 0; right: 0; bottom: var(--taskbar); }
+  .icon {
+    position: absolute; width: 76px; padding: 4px 2px 5px;
+    display: flex; flex-direction: column; align-items: center;
+    border: 1px solid transparent; border-radius: 4px;
+    user-select: none; touch-action: none; cursor: default;
+  }
+  .icon:hover { background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.2); }
+  .icon.drag { opacity: .88; z-index: 10; transform: scale(1.04); }
+  .icon.settle { transition: left .22s cubic-bezier(.2,.8,.3,1), top .22s cubic-bezier(.2,.8,.3,1); }
+  .glyph { width: 48px; height: 48px; border-radius: 10px; display: grid; place-items: center; color: #fff;
+    font-size: 21px; font-weight: 700; box-shadow: 0 2px 6px rgba(0,0,0,.35); pointer-events: none; }
+  .label {
+    margin-top: 3px; max-width: 72px; font-size: 12px; line-height: 15px; color: #fff; text-align: center;
+    text-shadow: 0 0 2px rgba(0,0,0,.95), 0 1px 3px rgba(0,0,0,.85);
+    word-break: break-all; overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; pointer-events: none;
+  }
+  #taskbar {
+    position: fixed; left: 0; right: 0; bottom: 0; height: var(--taskbar);
+    background: rgba(20,22,30,.62); backdrop-filter: blur(28px) saturate(1.6); -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    border-top: 1px solid rgba(255,255,255,.08); z-index: 40;
+  }
+  #hint {
+    position: fixed; top: 14px; right: 14px; padding: 10px 14px; border-radius: 10px; z-index: 50;
+    background: rgba(0,0,0,.78); color: #d9ffe4; font-size: 12px; line-height: 1.6;
+    border: 1px solid rgba(255,255,255,.14);
+  }
+  #hint.hidden { display: none; }
+  body.wall #desktop, body.wall #taskbar, body.wall #hint { display: none; }
+  #ghosts { position: fixed; inset: 0; pointer-events: none; display: none; }
+  body.preview #ghosts { display: block; }
+  .ghost { position: absolute; }
+  .ghost i { position: absolute; left: 50%; top: 4px; width: 48px; height: 48px; margin-left: -24px; border-radius: 9px;
+    background: rgba(255,255,255,.88); box-shadow: 3px 6px 8px rgba(0,0,0,.35); }
+  .ghost b { position: absolute; left: 14%; right: 14%; top: 60px; height: 10px; border-radius: 5px; background: rgba(255,255,255,.75); }
+</style>
+</head>
+<body>
+<canvas id="art"></canvas>
+<div id="desktop"></div>
+<div id="taskbar"></div>
+<div id="hint"><b>Deskland · 复古终端</b><br>拖动图标，ASCII 窗口会跟着合并、拆开<br>R 换一张 · P 换荧光色 · A 来一张 ASCII 画 · H 隐藏提示</div>
+
+<script>
+'use strict';
+
+/* ======================================================================
+   参数（默认值和 themes.json 里复古终端主题的 default 保持一致）
+   ====================================================================== */
+const CELL_W = 76, CELL_H = 100, GRID_X0 = 4, GRID_Y0 = 6, TASKBAR = 48;
+const MORPH_MS = 500;
+
+const QS = new URLSearchParams(location.search);
+const WALL = QS.has('wallpaper');
+const PREVIEW = QS.has('preview');
+const P = { phosphor: 0, crt: 0.6, speed: 1, art: 1, font: 14 };
+const DEFAULTS = Object.assign({}, P);
+const LIMITS = { phosphor: [0, 2], crt: [0, 1], speed: [0.25, 3], art: [0, 2], font: [11, 18] };
+const INTS = new Set(['phosphor', 'art', 'font']);
+
+const cv = document.getElementById('art');
+const ctx = cv.getContext('2d', { alpha: false });
+let W = innerWidth, H = innerHeight;
+let icons = [];
+let seed = QS.has('seed') ? (+QS.get('seed') | 0) : (WALL || PREVIEW) ? 20261113 : (Math.random() * 1e6) | 0;
+
+/* ---------- 显示器：每块屏幕一个终端，状态栏里标出是第几块 ---------- */
+let MON = { x: 0, y: 0 }, SCREENS = null;
+const monSalt = () => (Math.round(MON.x) * 7 + Math.round(MON.y) * 13) | 0;
+function monLabel() {
+  if (!SCREENS || SCREENS.length < 2) return '';
+  const order = SCREENS.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const i = order.findIndex(r => Math.abs(r[0] - MON.x) < 1 && Math.abs(r[1] - MON.y) < 1);
+  return `tty${i + 1}/${SCREENS.length}  `;
+}
+
+function mulberry32(a) {
+  return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+
+/* ======================================================================
+   荧光色 / 字体 / 字符格
+   ====================================================================== */
+const PHOS = [{ fg: '88,255,140', bg: '#030d07' }, { fg: '255,176,40', bg: '#0d0700' }, { fg: '150,225,255', bg: '#020a10' }];
+const ALPHA = { n: 0.8, d: 0.42, b: 1 };
+let PH = PHOS[0], FONT = '', FONTB = '', CW = 8.4, LH = 20, cols = 1, rows = 1, prow = 1;
+const col = a => `rgba(${PH.fg},${a})`;
+function setMetrics() {
+  PH = PHOS[P.phosphor];
+  FONT = `${P.font}px "Cascadia Mono", Consolas, "Courier New", monospace`;
+  FONTB = `bold ${FONT}`;
+  ctx.font = FONT; CW = ctx.measureText('0').width || P.font * 0.6;
+  const s = cv._scale;
+  LH = Math.round(P.font * 1.4 * s) / s;                  // 行高取整到实际像素：整张往上挪一行时不会越挪越歪
+  cols = Math.max(10, Math.floor(W / CW)); rows = Math.max(6, Math.floor((H - TASKBAR) / LH)); prow = rows - 1;
+}
+const glow = () => 5 * P.crt * cv._scale;
+// 一行 = 若干段 [文字, 样式]；样式 n 普通 / d 暗 / b 亮 / i 反白
+function drawSegs(c, segs, x, y, maxW, blur) {
+  let cx = x;
+  for (const [t, st] of segs) {
+    if (!t) continue;
+    if (cx >= x + maxW) break;
+    const w = t.length * CW;
+    if (st === 'i') {
+      c.shadowBlur = 0; c.fillStyle = col(0.85); c.fillRect(cx, y - LH / 2 + 1, Math.min(w, x + maxW - cx), LH - 2);
+      c.font = FONTB; c.fillStyle = PH.bg; c.fillText(t, cx, y);
+    } else {
+      c.font = st === 'b' ? FONTB : FONT; c.fillStyle = col(ALPHA[st] || 0.8);
+      c.shadowColor = col(0.9); c.shadowBlur = blur; c.fillText(t, cx, y);
+    }
+    cx += w;
+  }
+  c.shadowBlur = 0;
+  return cx;
+}
+
+/* ======================================================================
+   虚构的命令和输出
+   ====================================================================== */
+const PROMPT = [['dev@deskland', 'b'], [':', 'n'], ['~/deskland', 'n'], ['$ ', 'n']];
+const WORDS = ['icon', 'layout', 'shore', 'cloud', 'cache', 'sprite', 'noise', 'theme', 'light', 'shadow', 'cursor', 'screen', 'palette', 'desk', 'share'];
+const CRATES = ['serde', 'tokio', 'regex', 'image', 'rand', 'winit', 'log', 'anyhow', 'png', 'bytemuck', 'smallvec', 'glam'];
+const SPECS = ['keeps icons above water', 'fades the old frame', 'pauses when maximized', 'walks the cat on time', 'draws at real pixels'];
+const MSGS = ['feat: desk theme', 'fix: startup pause race', 'perf: cache static layers', 'docs: record release', 'feat: multi-monitor windows',
+  'fix: thumbnail rendering', 'refactor: icon reader', 'chore: bump webview2', 'feat: share animation', 'test: shoreline warp'];
+const PAGES = ['desk.html', 'settings.html', 'themes.json', 'share.js', 'i18n/en.json', 'flat.html'];
+const ART_CAT = ['   /\\_/\\', '  ( o.o )', '   > ^ <', '  /  _  \\', ' (__| |__)'];
+const ART_ROCKET = ['      /\\', '     /  \\', '    | () |', '    |    |', '   /| /\\ |\\', '  /_|/  \\|_\\', '     ^^^^', '     ))))'];
+const ART_LOGO = ['  .------------.', '  | >_         |', '  |            |', '  |            |', "  '------------'", '      __||__'];
+
+function script(p) {
+  const r = p.rng, pick = a => a[Math.floor(r() * a.length)], hex = () => ((r() * 0xfffffff) | 0).toString(16).padStart(7, '0');
+  const ev = [], cmd = text => ev.push({ k: 'cmd', text }), wait = d => ev.push({ k: 'wait', d });
+  const O = (t, st = 'n', d = 0.08) => ev.push({ k: 'out', segs: Array.isArray(t) ? t : [[t, st]], d });
+  const art = (lines, st = 'b') => lines.forEach(l => O(l, st, 0.07));
+  if (p.forceArt || (P.art && r() < [0, 0.1, 0.28][P.art])) {
+    p.forceArt = false;
+    const k = Math.floor(r() * 3);
+    if (k === 0) { cmd('cat notes/cat.txt'); art(ART_CAT); }
+    else if (k === 1) { cmd('./deploy.sh staging'); O('building bundle...', 'd', 0.6); art(ART_ROCKET); O([['deployed to staging ', 'n'], ['✓', 'b']], 'n', 0.5); }
+    else {
+      cmd('deskfetch');
+      const info = ['dev@deskland', '------------', 'OS: Windows 11 x64', 'Shell: zsh 5.9', 'Theme: ' + ['phosphor-green', 'phosphor-amber', 'phosphor-ice'][P.phosphor],
+        `Uptime: ${Math.floor(performance.now() / 60000)} mins`, 'Target: 30 fps'];
+      for (let i = 0; i < info.length; i++) O([[(ART_LOGO[i] || '').padEnd(20), 'b'], [info[i], i < 2 ? 'b' : 'n']], 'n', 0.06);
+    }
+    wait(1.5 + r() * 2);
+    return ev;
+  }
+  switch (pick(p.pool)) {
+    case 'npm': {
+      const n = 900 + Math.floor(r() * 600);
+      cmd('npm install');
+      ev.push({ k: 'bar', label: 'reify:' + pick(WORDS), d: 2 + r() * 2.5 });
+      O(`added ${n} packages, and audited ${n + 1} packages in ${(3 + r() * 8).toFixed(0)}s`, 'n', 0.3);
+      O(''); O(`${100 + Math.floor(r() * 150)} packages are looking for funding`, 'd'); O('  run `npm fund` for details', 'd'); O('');
+      O([['found ', 'n'], ['0', 'b'], [' vulnerabilities', 'n']]);
+      break;
+    }
+    case 'cargo': {
+      cmd('cargo build --release');
+      const n = 4 + Math.floor(r() * 6);
+      for (let i = 0; i < n; i++) O([['   Compiling ', 'b'], [`${pick(CRATES)} v${Math.floor(r() * 2)}.${Math.floor(r() * 30)}.${Math.floor(r() * 9)}`, 'n']], 'n', 0.25 + r() * 0.7);
+      O([['   Compiling ', 'b'], ['deskland v0.1.3 (~/deskland)', 'n']], 'n', 1.2);
+      O([['    Finished ', 'b'], [`release [optimized] target(s) in ${(8 + r() * 20).toFixed(1)}s`, 'n']], 'n', 1.6 + r() * 2);
+      break;
+    }
+    case 'test': {
+      cmd('npm test');
+      O('> deskland@0.1.3 test', 'd'); O('> vitest run', 'd', 0.3); O('');
+      const n = 3 + Math.floor(r() * 4), fail = r() < 0.3 ? Math.floor(r() * n) : -1;
+      let tests = 0;
+      for (let i = 0; i < n; i++) {
+        const k = 3 + Math.floor(r() * 14), name = `src/${pick(WORDS)}.test.ts`;
+        tests += k;
+        if (i === fail) { O([[' FAIL ', 'i'], [` ${name} > ${pick(SPECS)}`, 'n']], 'n', 0.6); O('   AssertionError: expected 12 to be 11', 'd', 0.1); }
+        else O([[' ✓ ', 'b'], [`${name} (${k} tests) `, 'n'], [`${Math.floor(20 + r() * 400)}ms`, 'd']], 'n', 0.2 + r() * 0.6);
+      }
+      O('');
+      O([[' Test Files  ', 'd'], [fail >= 0 ? `1 failed | ${n - 1} passed` : `${n} passed`, 'b'], [` (${n})`, 'd']], 'n', 0.3);
+      O([['      Tests  ', 'd'], [`${tests} passed`, 'b'], [` (${tests})`, 'd']]);
+      if (fail >= 0) {                                    // 失败了：改一下再跑，变绿
+        wait(1.4 + r()); cmd('npm test -- --run --changed');
+        O([[' ✓ ', 'b'], ['fixed: off-by-one in shoreline', 'n']], 'n', 1.2);
+        O([[' Test Files  ', 'd'], [`${n} passed`, 'b'], [` (${n})`, 'd']], 'n', 0.3);
+      }
+      break;
+    }
+    case 'lint': {
+      cmd('npx eslint prototype');
+      if (r() < 0.5) O([['no problems found ', 'n'], ['✓', 'b']], 'n', 1.2);
+      else {
+        O('prototype/' + pick(PAGES), 'b', 1);
+        O(`  ${10 + Math.floor(r() * 900)}:${1 + Math.floor(r() * 60)}  warning  Unexpected console statement  no-console`, 'd');
+        O(''); O([['✖ 1 problem ', 'b'], ['(0 errors, 1 warning)', 'n']]);
+      }
+      break;
+    }
+    case 'git': {
+      const a = 2 + Math.floor(r() * 40), b = Math.floor(r() * 20);
+      cmd('git pull --rebase');
+      O(`remote: Enumerating objects: ${a + b}, done.`, 'd', 0.6); O('remote: Counting objects: 100%, done.', 'd', 0.3);
+      O(`Updating ${hex()}..${hex()}`, 'n', 0.3); O('Fast-forward');
+      O([[` prototype/${pick(PAGES)} | ${a + b} `, 'n'], ['+'.repeat(Math.min(a, 24)), 'b'], ['-'.repeat(Math.min(b, 12)), 'd']]);
+      O(` 1 file changed, ${a} insertions(+), ${b} deletions(-)`);
+      break;
+    }
+    case 'log': {
+      cmd('git log --oneline -6');
+      for (let i = 0; i < 6; i++) O([[hex(), 'b'], [i === 0 ? ' (HEAD -> main) ' : ' ', 'n'], [pick(MSGS), 'n']], 'n', 0.03);
+      break;
+    }
+    case 'serve': {
+      cmd('node prototype/serve.mjs');
+      O('listening on http://localhost:5178', 'b', 0.4);
+      const n = 3 + Math.floor(r() * 6);
+      for (let i = 0; i < n; i++) O([[`GET /${pick(PAGES)} `, 'n'], ['200', 'b'], [` ${1 + Math.floor(r() * 30)}ms`, 'd']], 'n', 0.6 + r() * 2.2);
+      O('^C', 'd', 1.5);
+      break;
+    }
+    case 'ls': {
+      cmd('ls -la prototype');
+      for (const f of ['.', 'assets', 'i18n', 'thumbs', ...PAGES.slice(0, 4)]) {
+        const dir = !f.includes('.') || f === '.';
+        O([[dir ? 'drwxr-xr-x  ' : '-rw-r--r--  ', 'd'], [`dev dev ${String(dir ? 4096 : 2000 + Math.floor(r() * 80000)).padStart(6)}  Nov 13  `, 'd'], [f, dir ? 'b' : 'n']], 'n', 0.03);
+      }
+      break;
+    }
+    default: {
+      cmd('docker compose up');
+      O('[+] Running 3/3', 'b', 0.8);
+      for (const s of ['db', 'cache', 'web']) O([[' ✔ ', 'b'], [`Container deskland-${s}-1  `, 'n'], ['Started', 'b']], 'n', 0.3 + r() * 0.5);
+      const n = 2 + Math.floor(r() * 4);
+      for (let i = 0; i < n; i++) O([['web-1  | ', 'd'], [pick(['ready on :5178', 'GET /settings.html 200', 'icons changed: 14', 'theme switched: desk', 'snapshot ok'])]], 'n', 0.8 + r() * 1.6);
+      O('^C', 'd', 1.2); O('Gracefully stopping... (press Ctrl+C again to force)', 'd', 0.2);
+    }
+  }
+  wait(1.2 + r() * 2.6);
+  return ev;
+}
+
+/* ======================================================================
+   窗格：完成的行画在窗格自己的画布上（新的一行来了整张往上挪），正在进行的一行每帧现画
+   ====================================================================== */
+let panes = [];
+const POOLS = [['npm', 'cargo', 'ls', 'serve', 'lint'], ['test', 'test', 'lint', 'cargo'], ['git', 'log', 'docker', 'serve']];
+function buildPanes() {
+  const n = clamp(Math.round(W / 720), 1, 4), s = cv._scale;
+  panes = [];
+  let c0 = 0;
+  for (let k = 0; k < n; k++) {
+    const wc = k === n - 1 ? cols - c0 : Math.floor((cols - (n - 1)) / n);
+    const mk = () => { const c = document.createElement('canvas'); c.width = Math.ceil(wc * CW * s); c.height = Math.max(1, Math.ceil((prow - 1) * LH * s)); c._s = s; return c; };
+    const pool = n === 1 ? [...POOLS[0], ...POOLS[1], ...POOLS[2]] : POOLS[k % 3];
+    const p = { c0, wc, cv: [mk(), mk()], cur: 0, rng: mulberry32(seed + k * 7919 + monSalt()), pool, queue: [], ev: null, evT: 0, t: 0, scrollT: -9, forceArt: false };
+    panes.push(p);
+    for (let i = 0; i < prow + 4 && i < 400; i++) stepPane(p, 0, true);     // 先填满历史，开场就是一屏日志
+    c0 += wc + 1;
+  }
+}
+function pushLine(p, segs, instant) {
+  const a = p.cv[p.cur], b = p.cv[1 - p.cur], s = a._s;
+  const bc = b.getContext('2d');
+  bc.setTransform(1, 0, 0, 1, 0, 0); bc.clearRect(0, 0, b.width, b.height);
+  bc.drawImage(a, 0, -Math.round(LH * s));
+  bc.setTransform(s, 0, 0, s, 0, 0); bc.textBaseline = 'middle';
+  bc.save(); bc.beginPath(); bc.rect(0, 0, p.wc * CW, b.height / s); bc.clip();
+  drawSegs(bc, segs, 4, (prow - 2) * LH + LH / 2, p.wc * CW - 8, glow());
+  bc.restore();
+  p.cur = 1 - p.cur;
+  if (!instant) p.scrollT = simT;
+}
+function evDur(p, ev, instant) {
+  if (instant) return 0;
+  if (ev.k === 'cmd') return 0.5 + ev.text.length / 15;
+  return ev.d;
+}
+// 推进一个窗格；instant：开场预填（不等待，返回前只完成一行）
+function stepPane(p, dt, instant) {
+  p.t += dt;
+  for (let guard = 0; guard < 40; guard++) {
+    if (!p.ev) {
+      if (!p.queue.length) p.queue = script(p);
+      p.ev = p.queue.shift();
+      // 紧接着上一件事结束的时间开始（一帧里可能完成好几件），但落后太多就不追了
+      p.evT = instant ? p.t : Math.max(p.nextT === undefined ? p.t : p.nextT, p.t - 0.5);
+    }
+    const ev = p.ev, d = evDur(p, ev, instant);
+    if (p.t - p.evT < d) return;
+    p.ev = null; p.nextT = p.evT + d;
+    if (ev.k === 'cmd') pushLine(p, [...PROMPT, [ev.text, 'n']], instant);
+    else if (ev.k === 'out') pushLine(p, ev.segs, instant);
+    else if (ev.k === 'bar') pushLine(p, barSegs(ev.label, 1), instant);
+    else continue;                                       // wait：不出行
+    if (instant) return;
+  }
+}
+function barSegs(label, f) {
+  const n = 22, k = Math.round(n * f);
+  return [[label.padEnd(16), 'd'], ['[', 'n'], ['#'.repeat(k), 'b'], ['.'.repeat(n - k), 'd'], ['] ', 'n'], [`${Math.round(f * 100)}%`, 'b']];
+}
+function activeSegs(p) {
+  const ev = p.ev;
+  if (!ev) return null;
+  const e = p.t - p.evT, blink = Math.floor(simT * 1.9) % 2 === 0;
+  if (ev.k === 'cmd') {
+    const d = evDur(p, ev), typed = clamp(Math.floor((e - 0.35) / (d - 0.5) * ev.text.length), 0, ev.text.length);
+    return [...PROMPT, [ev.text.slice(0, typed), 'n'], [typed < ev.text.length || blink ? '█' : ' ', 'n']];
+  }
+  if (ev.k === 'bar') return barSegs(ev.label, clamp(e / ev.d, 0, 1));
+  if (ev.k === 'wait') return [...PROMPT, [blink ? '█' : ' ', 'n']];
+  return null;
+}
+
+/* ======================================================================
+   静态图层：图标的 ASCII 窗口（挨着的合成一个）、窗格分隔线、扫描线、暗角
+   ====================================================================== */
+const TITLES = ['~/src', 'build', 'logs', 'docs', 'tmp', 'bin', 'notes', 'home', 'dist', 'assets'];
+const Tc = [document.createElement('canvas'), document.createElement('canvas')];
+let tcur = 0, told = -1, tT0 = 0, topOK = false;
+function renderTop(dst) {
+  dst.width = cv.width; dst.height = cv.height;
+  const c = dst.getContext('2d'), s = cv._scale;
+  c.setTransform(s, 0, 0, s, 0, 0); c.textBaseline = 'middle';
+  c.fillStyle = col(0.3);                                  // 窗格之间的分隔线
+  for (const p of panes.slice(1)) c.fillRect((p.c0 - 0.5) * CW, 0, 1, prow * LH);
+  // 图标占的字符格
+  const occ = new Uint8Array(cols * prow), at = (x, y) => x >= 0 && y >= 0 && x < cols && y < prow && occ[y * cols + x] === 1;
+  for (const ic of icons) {
+    const c0 = Math.max(0, Math.floor((ic.x - 5) / CW)), c1 = Math.min(cols - 1, Math.floor((ic.x + ic.w + 5) / CW));
+    const r0 = Math.max(0, Math.floor((ic.y - 6) / LH)), r1 = Math.min(prow - 1, Math.floor((ic.y + ic.h + 6) / LH));
+    for (let y = r0; y <= r1; y++) for (let x = c0; x <= c1; x++) occ[y * cols + x] = 1;
+  }
+  const border = new Uint8Array(cols * prow);
+  c.fillStyle = PH.bg;
+  for (let y = 0; y < prow; y++) for (let x = 0; x < cols; x++) {
+    if (!at(x, y)) continue;
+    c.fillRect(x * CW - 0.5, y * LH - 0.5, CW + 1, LH + 1);
+    for (let dy = -1; dy <= 1 && !border[y * cols + x]; dy++) for (let dx = -1; dx <= 1; dx++) if (!at(x + dx, y + dy)) { border[y * cols + x] = 1; break; }
+  }
+  const isB = (x, y) => x >= 0 && y >= 0 && x < cols && y < prow && border[y * cols + x] === 1;
+  // 边框：像 ┌─┐ 一样从格子中心连到相邻的边框格（画成线，上下行之间不留缝）
+  c.strokeStyle = col(0.9); c.lineWidth = 1.4; c.shadowColor = col(0.8); c.shadowBlur = glow();
+  c.beginPath();
+  for (let y = 0; y < prow; y++) for (let x = 0; x < cols; x++) {
+    if (!isB(x, y)) continue;
+    const cx = (x + 0.5) * CW, cy = (y + 0.5) * LH;
+    if (isB(x + 1, y)) { c.moveTo(cx, cy); c.lineTo(cx + CW, cy); }
+    if (isB(x, y + 1)) { c.moveTo(cx, cy); c.lineTo(cx, cy + LH); }
+  }
+  c.stroke();
+  // 每个窗口一个标题 [ ~/src ]，写在上边框左边
+  const seen = new Uint8Array(cols * prow);
+  c.font = FONTB;
+  for (let y = 0; y < prow; y++) for (let x = 0; x < cols; x++) {
+    if (!at(x, y) || seen[y * cols + x]) continue;
+    const st = [[x, y]]; seen[y * cols + x] = 1;
+    let minX = x, maxX = x;
+    while (st.length) {
+      const [px, py] = st.pop();
+      if (py === y) { minX = Math.min(minX, px); maxX = Math.max(maxX, px); }
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = px + dx, ny = py + dy;
+        if (at(nx, ny) && !seen[ny * cols + nx]) { seen[ny * cols + nx] = 1; st.push([nx, ny]); }
+      }
+    }
+    const title = `[ ${TITLES[Math.abs(x * 7 + y * 13 + seed) % TITLES.length]} ]`, room = maxX - minX - 3;
+    if (room < 6) continue;
+    const t = title.length > room ? title.slice(0, room) : title;
+    c.shadowBlur = 0; c.fillStyle = PH.bg; c.fillRect((minX + 2) * CW, y * LH, t.length * CW, LH);
+    c.shadowBlur = glow(); c.fillStyle = col(1); c.fillText(t, (minX + 2) * CW, (y + 0.5) * LH);
+  }
+  c.shadowBlur = 0;
+  // 扫描线和暗角
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  if (P.crt > 0) {
+    c.fillStyle = `rgba(0,0,0,${0.28 * P.crt})`;
+    for (let y = 0; y < dst.height; y += 3) c.fillRect(0, y, dst.width, 1);
+    const g = c.createRadialGradient(dst.width / 2, dst.height / 2, Math.min(dst.width, dst.height) * 0.35, dst.width / 2, dst.height / 2, Math.hypot(dst.width, dst.height) * 0.62);
+    g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, `rgba(0,0,0,${0.6 * P.crt})`);
+    c.fillStyle = g; c.fillRect(0, 0, dst.width, dst.height);
+  }
+}
+let iconsSeen = !(WALL || PREVIEW);
+function commit(rebuild) {
+  setMetrics();
+  if (rebuild || !panes.length) buildPanes();
+  const now = performance.now();
+  told = topOK ? tcur : -1; tcur = 1 - tcur; tT0 = now;
+  renderTop(Tc[tcur]); topOK = true;
+  if (paused) { told = -1; draw(now); }
+}
+
+/* ======================================================================
+   尺寸 / 主循环
+   ====================================================================== */
+function resize() {
+  const box = cv.getBoundingClientRect();
+  W = box.width || innerWidth; H = box.height || innerHeight;
+  const scale = PREVIEW ? 0.5 : (devicePixelRatio || 1);
+  cv.width = Math.round(W * scale); cv.height = Math.round(H * scale); cv._scale = scale;
+  topOK = false;
+}
+let simT = 0, lastT = 0, frameN = 0, paused = false;
+let cacheOK = true;                                         // share.js 改尺寸后会把它置 false；draw() 里按尺寸自己检查缓存
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (paused) { lastT = 0; return; }
+  if (lastT && now - lastT < 31) return;                   // 30fps
+  const dt = lastT ? Math.min((now - lastT) / 1000, 0.1) : 0.033;
+  lastT = now;
+  simT += dt;
+  if (iconsSeen) for (const p of panes) stepPane(p, dt * P.speed, false);
+  draw(now);
+  frameN++;
+}
+function draw(now) {
+  const s = cv._scale;
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1;
+  ctx.fillStyle = PH.bg; ctx.fillRect(0, 0, cv.width, cv.height);
+  if (!iconsSeen || !panes.length) return;
+  if (!topOK || Tc[tcur].width !== cv.width || Tc[tcur].height !== cv.height) { renderTop(Tc[tcur]); told = -1; topOK = true; }
+  ctx.setTransform(s, 0, 0, s, 0, 0); ctx.textBaseline = 'middle';
+  for (const p of panes) {
+    const x = p.c0 * CW, k = clamp((simT - p.scrollT) / 0.09, 0, 1), yOff = (1 - k) * LH;
+    const pc = p.cv[p.cur], w = pc.width / pc._s, h = pc.height / pc._s;
+    ctx.save(); ctx.beginPath(); ctx.rect(x, 0, p.wc * CW, prow * LH); ctx.clip();
+    ctx.drawImage(pc, x, yOff, w, h);
+    const segs = activeSegs(p);
+    if (segs) drawSegs(ctx, segs, x + 4, (prow - 1) * LH + LH / 2 + yOff, p.wc * CW - 8, glow());
+    ctx.restore();
+  }
+  // tmux 状态栏
+  const d = new Date(), y = prow * LH + LH / 2;
+  ctx.fillStyle = col(0.82); ctx.fillRect(0, prow * LH, W, LH);
+  ctx.font = FONTB; ctx.fillStyle = PH.bg;
+  ctx.fillText(` [deskland] ${panes.map((p, i) => `${i}:${p.pool[0]}${i === 0 ? '*' : ''}`).join('  ')}`, 0, y);
+  const right = `${monLabel()}${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}  ${d.getDate()} ${d.toLocaleString('en', { month: 'short' })} `;
+  ctx.textAlign = 'right'; ctx.fillText(right, W, y); ctx.textAlign = 'left';
+  // 静态图层（图标窗口、扫描线、暗角）；图标变化时新旧交叉淡入
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(Tc[tcur], 0, 0);
+  if (told >= 0) {
+    const e = Math.min(1, (now - tT0) / MORPH_MS);
+    if (e < 1) { ctx.globalAlpha = 1 - e; ctx.drawImage(Tc[told], 0, 0); ctx.globalAlpha = 1; } else told = -1;
+  }
+  // 慢慢往下扫的一条亮带
+  if (P.crt > 0) {
+    const bh = 140 * s, by = ((simT * 70 * s) % (cv.height + bh * 2)) - bh;
+    const g = ctx.createLinearGradient(0, by, 0, by + bh);
+    g.addColorStop(0, `rgba(${PH.fg},0)`); g.addColorStop(0.5, `rgba(${PH.fg},${0.035 * P.crt})`); g.addColorStop(1, `rgba(${PH.fg},0)`);
+    ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = g; ctx.fillRect(0, by, cv.width, bh); ctx.globalCompositeOperation = 'source-over';
+  }
+}
+
+/* ======================================================================
+   浏览器里单独打开：示例图标，可以拖
+   ====================================================================== */
+const desktop = document.getElementById('desktop');
+const SAMPLE = [['回收站', '#7b8fb5'], ['此电脑', '#2f7de1'], ['项目资料', '#e3a32f'], ['设计稿', '#db2777'], ['周报.xlsx', '#107c41'],
+  ['合同.pdf', '#d33a2c'], ['Chrome', '#f59e0b'], ['VS Code', '#2563eb'], ['Figma', '#8b5cf6'], ['Steam', '#334155'],
+  ['照片', '#0ea5a4'], ['下载', '#e3a32f'], ['笔记.txt', '#64748b']];
+let grid = { cols: 1, rows: 1 }, drag = null;
+const cellPos = (c, r) => ({ x: GRID_X0 + c * CELL_W, y: GRID_Y0 + r * CELL_H });
+function addIcon([name, color], pos) {
+  const el = document.createElement('div');
+  el.className = 'icon';
+  el.innerHTML = `<div class="glyph" style="background:${color}">${[...name][0]}</div><div class="label">${name}</div>`;
+  el.style.left = pos.x + 'px'; el.style.top = pos.y + 'px';
+  desktop.appendChild(el);
+  const ic = { x: pos.x, y: pos.y, w: el.offsetWidth, h: el.offsetHeight, el };
+  icons.push(ic);
+  el.addEventListener('pointerdown', e => { if (e.button) return; el.setPointerCapture(e.pointerId); el.classList.remove('settle'); drag = { ic, sx: e.clientX, sy: e.clientY, ox: ic.x, oy: ic.y }; });
+  el.addEventListener('pointermove', e => { if (!drag || drag.ic !== ic) return; el.classList.add('drag'); el.style.left = drag.ox + e.clientX - drag.sx + 'px'; el.style.top = drag.oy + e.clientY - drag.sy + 'px'; });
+  el.addEventListener('pointerup', e => {
+    if (!drag || drag.ic !== ic) return;
+    const d = drag; drag = null; el.classList.remove('drag');
+    const cx = d.ox + e.clientX - d.sx + ic.w / 2, cy = d.oy + e.clientY - d.sy + ic.h / 2;
+    let best = null, bd = Infinity;
+    for (let c = 0; c < grid.cols; c++) for (let r = 0; r < grid.rows; r++) {
+      const p = cellPos(c, r);
+      if (icons.some(o => o !== ic && Math.abs(o.x - p.x) < 2 && Math.abs(o.y - p.y) < 2)) continue;
+      const dd = Math.hypot(p.x + CELL_W / 2 - cx, p.y + CELL_H / 2 - cy);
+      if (dd < bd) { bd = dd; best = p; }
+    }
+    if (!best) best = { x: d.ox, y: d.oy };
+    el.classList.add('settle'); ic.x = best.x; ic.y = best.y; el.style.left = best.x + 'px'; el.style.top = best.y + 'px';
+    if (best.x !== d.ox || best.y !== d.oy) commit(false);
+  });
+  return ic;
+}
+function sampleLayout() {
+  grid.cols = Math.max(1, Math.floor((W - GRID_X0) / CELL_W)); grid.rows = Math.max(1, Math.floor((H - TASKBAR - GRID_Y0) / CELL_H));
+  const cells = [];
+  for (let r = 0; r < Math.min(5, grid.rows); r++) cells.push([0, r]);
+  for (let r = 0; r < Math.min(2, grid.rows); r++) cells.push([1, r]);
+  const mc = Math.floor(grid.cols * 0.6), mr = Math.floor(grid.rows * 0.4);
+  for (const [dc, dr] of [[0, 0], [1, 0]]) cells.push([mc + dc, mr + dr]);
+  let i = 0;
+  for (const [c, r] of cells) if (c < grid.cols && r < grid.rows) addIcon(SAMPLE[i++ % SAMPLE.length], cellPos(c, r));
+}
+const hint = document.getElementById('hint');
+addEventListener('keydown', e => {
+  if (WALL || PREVIEW) return;
+  const k = e.key.toLowerCase();
+  if (k === 'r') reseed((Math.random() * 1e6) | 0);
+  else if (k === 'h') hint.classList.toggle('hidden');
+  else if (k === 'p') { P.phosphor = (P.phosphor + 1) % 3; commit(true); }
+  else if (k === 'a') { for (const p of panes) p.forceArt = true; }
+});
+let resizeT = 0;
+addEventListener('resize', () => {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(() => { resize(); if (iconsSeen) commit(true); }, 100);
+});
+
+/* ======================================================================
+   托管模式：icons / settings / reset / pause / screens
+   ====================================================================== */
+function reseed(v) { seed = v; if (iconsSeen) commit(true); }
+function applySettings(v) {
+  if (typeof v.seed === 'number' && v.seed !== seed) reseed(v.seed);
+  let rebuild = false;
+  for (const k in v) {
+    if (!(k in LIMITS) || typeof v[k] !== 'number' || !isFinite(v[k])) continue;
+    let x = clamp(v[k], LIMITS[k][0], LIMITS[k][1]);
+    if (INTS.has(k)) x = Math.round(x);
+    if (P[k] === x) continue;
+    P[k] = x;
+    if (k === 'phosphor' || k === 'font' || k === 'crt') rebuild = true;   // 已经画好的行要换颜色 / 字号 / 辉光
+  }
+  if (rebuild && iconsSeen) commit(true);
+}
+function setScreens(m) {
+  if (!Array.isArray(m.me) || !Array.isArray(m.all)) return;
+  const k = devicePixelRatio || 1;
+  MON = { x: m.me[0] / k, y: m.me[1] / k };
+  SCREENS = m.all.filter(r => Array.isArray(r) && r.length === 4).map(r => r.map(v => v / k));
+  if (iconsSeen) commit(true);
+}
+function drawGhosts() {
+  document.getElementById('ghosts').innerHTML = icons.map(ic => `<div class="ghost" style="left:${ic.x}px;top:${ic.y}px;width:${ic.w}px;height:${ic.h}px"><i></i><b></b></div>`).join('');
+}
+function startHostedMode() {
+  document.body.classList.add('wall');
+  if (PREVIEW) {
+    document.body.classList.add('preview');
+    const g = document.createElement('div'); g.id = 'ghosts'; document.body.appendChild(g);
+  }
+  icons = [];
+  const handle = m => {
+    if (m.t === 'pause') { paused = PREVIEW ? false : !!m.v; return; }
+    if (m.t === 'screens') { setScreens(m); return; }
+    if (m.t === 'settings') { applySettings(m.v || {}); return; }
+    if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
+    if (m.t !== 'icons') return;
+    const k = window.devicePixelRatio || 1;
+    icons = m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : [];
+    if (PREVIEW) drawGhosts();
+    const firstTime = !iconsSeen;
+    iconsSeen = true;
+    commit(firstTime);
+  };
+  if (PREVIEW) {
+    addEventListener('message', ev => { if (ev.source === parent) handle(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data); });
+    parent.postMessage(JSON.stringify({ t: 'ready' }), '*');
+    return;
+  }
+  const host = window.chrome && window.chrome.webview;
+  if (!host) return;
+  host.addEventListener('message', ev => handle(JSON.parse(ev.data)));
+  host.postMessage('ready');
+}
+
+/* ---------- 启动 ---------- */
+window.__dbg = {
+  P, commit, reseed,
+  bench() {
+    const ts = [];
+    for (let i = 0; i < 10; i++) { const a = performance.now(); draw(performance.now()); ts.push(performance.now() - a); }
+    ts.sort((a, b) => a - b);
+    const a = performance.now(); commit(false); const c = performance.now() - a;
+    return { frame: +ts[5].toFixed(2), commit: +c.toFixed(1), canvas: cv.width + 'x' + cv.height };
+  },
+};
+resize();
+setMetrics();
+if (WALL || PREVIEW) startHostedMode();
+else { sampleLayout(); commit(true); }
+requestAnimationFrame(frame);
+</script>
+<script src="share.js"></script>   <!-- 分享图片 / 分享动画（示例图标、名字是色块） -->
+</body>
+</html>

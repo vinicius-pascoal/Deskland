@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deskland · 代码编辑器（原型）</title>
+<!--
+  Deskland · 代码编辑器主题（整面墙是一个深色编辑器；Canvas 2D）
+  - 按种子生成的虚构代码（TypeScript / Python / Rust），带语法高亮、行号、缩进参考线；不读取任何真实文件
+  - 图标所在的地方像被选中的代码块：代码让开，留出一块带边框的选区
+  - 光标在空着的行上一个字一个字地打出新代码，偶尔出现红色波浪线，随后被改好；右侧的小地图慢慢滚动
+  - 多个显示器：编辑器按"虚拟桌面坐标"分成几栏，同一个文件从第一栏接着往下排，跨过屏幕边界也是连着的
+  性能：代码、选区都画进静态缓存（图标或设置变化时重画，新旧交叉淡入）；每帧只贴缓存，再画一行正在打的字和小地图
+-->
+<style>
+  :root { --taskbar: 48px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1b1f27; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif; }
+  #art { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #desktop { position: fixed; left: 0; top: 0; right: 0; bottom: var(--taskbar); }
+  .icon {
+    position: absolute; width: 76px; padding: 4px 2px 5px;
+    display: flex; flex-direction: column; align-items: center;
+    border: 1px solid transparent; border-radius: 4px;
+    user-select: none; touch-action: none; cursor: default;
+  }
+  .icon:hover { background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.2); }
+  .icon.drag { opacity: .88; z-index: 10; transform: scale(1.04); }
+  .icon.settle { transition: left .22s cubic-bezier(.2,.8,.3,1), top .22s cubic-bezier(.2,.8,.3,1); }
+  .glyph { width: 48px; height: 48px; border-radius: 10px; display: grid; place-items: center; color: #fff;
+    font-size: 21px; font-weight: 700; box-shadow: 0 2px 6px rgba(0,0,0,.35); pointer-events: none; }
+  .label {
+    margin-top: 3px; max-width: 72px; font-size: 12px; line-height: 15px; color: #fff; text-align: center;
+    text-shadow: 0 0 2px rgba(0,0,0,.95), 0 1px 3px rgba(0,0,0,.85);
+    word-break: break-all; overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; pointer-events: none;
+  }
+  #taskbar {
+    position: fixed; left: 0; right: 0; bottom: 0; height: var(--taskbar);
+    background: rgba(20,22,30,.62); backdrop-filter: blur(28px) saturate(1.6); -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    border-top: 1px solid rgba(255,255,255,.08); z-index: 40;
+  }
+  #hint {
+    position: fixed; top: 44px; right: 120px; padding: 10px 14px; border-radius: 10px; z-index: 50;
+    background: rgba(16,18,26,.82); color: #e6e8f0; font-size: 12px; line-height: 1.6;
+    border: 1px solid rgba(255,255,255,.14); backdrop-filter: blur(16px);
+  }
+  #hint.hidden { display: none; }
+  body.wall #desktop, body.wall #taskbar, body.wall #hint { display: none; }
+  #ghosts { position: fixed; inset: 0; pointer-events: none; display: none; }
+  body.preview #ghosts { display: block; }
+  .ghost { position: absolute; }
+  .ghost i { position: absolute; left: 50%; top: 4px; width: 48px; height: 48px; margin-left: -24px; border-radius: 9px;
+    background: rgba(255,255,255,.88); box-shadow: 3px 6px 8px rgba(0,0,0,.35); }
+  .ghost b { position: absolute; left: 14%; right: 14%; top: 60px; height: 10px; border-radius: 5px; background: rgba(255,255,255,.75); }
+</style>
+</head>
+<body>
+<canvas id="art"></canvas>
+<div id="desktop"></div>
+<div id="taskbar"></div>
+<div id="hint"><b>Deskland · 代码编辑器</b><br>拖动图标，代码会给图标让出选区<br>R 换一张 · P 换配色 · G 换语言 · H 隐藏提示</div>
+
+<script>
+'use strict';
+
+/* ======================================================================
+   参数（默认值和 themes.json 里代码编辑器主题的 default 保持一致）
+   ====================================================================== */
+const CELL_W = 76, CELL_H = 100, GRID_X0 = 4, GRID_Y0 = 6, TASKBAR = 48;
+const MORPH_MS = 900, TAB_H = 34, MMW = 86;
+
+const QS = new URLSearchParams(location.search);
+const WALL = QS.has('wallpaper');
+const PREVIEW = QS.has('preview');
+const STILL = QS.has('still');
+const P = { palette: 0, lang: 0, font: 13, typing: 1, minimap: 1 };
+const DEFAULTS = Object.assign({}, P);
+const LIMITS = { palette: [0, 2], lang: [0, 2], font: [11, 18], typing: [0, 1], minimap: [0, 1] };
+
+const cv = document.getElementById('art');
+const ctx = cv.getContext('2d', { alpha: false });
+let W = innerWidth, H = innerHeight;
+let icons = [];
+let seed = QS.has('seed') ? (+QS.get('seed') | 0) : (WALL || PREVIEW) ? 20261113 : (Math.random() * 1e6) | 0;
+const FIX_NOW = QS.has('now') ? +QS.get('now') : null;
+const wallClock = () => FIX_NOW !== null ? FIX_NOW + performance.now() / 1000 : Date.now() / 1000;
+
+/* ---------- 显示器布局（CSS 像素，虚拟桌面坐标；调试：?me=x,y&all=x,y,w,h;...） ---------- */
+let MON = { x: 0, y: 0 }, SCREENS = null, layoutN = 0;
+if (QS.has('me')) { const [x, y] = QS.get('me').split(',').map(Number); MON = { x: x || 0, y: y || 0 }; }
+if (QS.has('all')) SCREENS = QS.get('all').split(';').filter(Boolean).map(s => s.split(',').map(Number));
+function screensCss() { return SCREENS && SCREENS.length ? SCREENS : [[MON.x, MON.y, W, H]]; }
+function deskBounds() {
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  for (const [x, y, w, h] of screensCss()) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x + w); y1 = Math.max(y1, y + h); }
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+const monSalt = () => (Math.round(MON.x) * 7 + Math.round(MON.y) * 13) | 0;
+
+function mulberry32(a) {
+  return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const ease = t => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+
+/* ======================================================================
+   配色
+   ====================================================================== */
+const PALS = [
+  { bg: '#1b1f27', tab: '#151920', tabOn: '#1b1f27', tabFg: '#7f8899', tabFgOn: '#d7dae0', sep: '#10131a', ln: '#4b5263', lnCur: '#c8ccd4',
+    cur: '#252b36', guide: 'rgba(255,255,255,0.06)', selSolid: '#243049', selEdge: '#41608f', cursor: '#61afef', err: '#ff5f6d',
+    mmBg: '#171a21', mmView: 'rgba(255,255,255,0.08)',
+    t: { kw: '#c678dd', fn: '#61afef', str: '#98c379', num: '#d19a66', com: '#5c6370', type: '#e5c07b', id: '#e06c75', op: '#abb2bf' } },
+  { bg: '#262220', tab: '#1e1a18', tabOn: '#262220', tabFg: '#8a7e72', tabFgOn: '#ebdbc4', sep: '#191513', ln: '#5e554c', lnCur: '#e0d2bd',
+    cur: '#312b27', guide: 'rgba(255,240,220,0.06)', selSolid: '#3a3029', selEdge: '#7a6248', cursor: '#f0b46a', err: '#f2685a',
+    mmBg: '#221e1c', mmView: 'rgba(255,240,220,0.08)',
+    t: { kw: '#f0846a', fn: '#e9b872', str: '#a9c27a', num: '#d3869b', com: '#7c6f64', type: '#83c0b0', id: '#ebdbc4', op: '#c9b99f' } },
+  { bg: '#fbfaf7', tab: '#ecebe6', tabOn: '#fbfaf7', tabFg: '#8a8d94', tabFgOn: '#383a42', sep: '#dcdad3', ln: '#b4b7bd', lnCur: '#383a42',
+    cur: '#f1efe8', guide: 'rgba(0,0,0,0.07)', selSolid: '#e2eafa', selEdge: '#a9c1f2', cursor: '#4078f2', err: '#e45649',
+    mmBg: '#f3f2ee', mmView: 'rgba(0,0,0,0.07)',
+    t: { kw: '#a626a4', fn: '#4078f2', str: '#50a14f', num: '#986801', com: '#a0a1a7', type: '#c18401', id: '#e45649', op: '#383a42' } },
+];
+const IND = () => [2, 4, 4][P.lang];
+const EXT = ['.ts', '.py', '.rs'];
+
+/* ======================================================================
+   虚构代码：按种子和语言生成，每行是 [文字, 类别] 的数组
+   ====================================================================== */
+const WORDS = ['icon', 'layout', 'desk', 'grid', 'shore', 'cloud', 'frame', 'cache', 'pixel', 'scale', 'seed', 'wave', 'tile', 'sprite', 'field',
+  'layer', 'noise', 'buffer', 'queue', 'state', 'theme', 'light', 'shadow', 'cursor', 'branch', 'screen', 'palette', 'motion', 'anchor', 'margin'];
+const TYPES = ['Icon', 'Rect', 'Layer', 'Frame', 'Theme', 'Vec2', 'Canvas', 'Screen', 'Palette', 'Field', 'Shore', 'Cache'];
+const NOTES = ['keep icons above the shoreline', 'recompute only when icons move', 'TODO: smooth this transition', 'static layers go into the cache',
+  'aim for 30fps on integrated graphics', 'one desk across every monitor', 'fade the old frame out', 'avoid allocations per frame',
+  'the cat walks on a schedule', 'draw at real pixel size', 'FIXME: negative monitor coordinates', 'pause when a window is maximized'];
+const STRS = ['ready', 'paused', 'icons', 'settings', 'screens', 'desk', 'snapshot', 'reset', '#1b1f27', 'wallpaper'];
+
+function makeGen(rng, lang) {
+  const pick = a => a[Math.floor(rng() * a.length)];
+  const cap = w => w[0].toUpperCase() + w.slice(1);
+  const nm = () => rng() < 0.5 ? pick(WORDS) : lang === 1 ? pick(WORDS) + '_' + pick(WORDS) : pick(WORDS) + cap(pick(WORDS));
+  const UP = () => pick(WORDS).toUpperCase() + '_' + pick(WORDS).toUpperCase();
+  const num = () => rng() < 0.6 ? String(Math.floor(rng() * 120)) : (rng() * 4).toFixed(2);
+  const K = t => [t, 'kw'], F = t => [t, 'fn'], S = t => [t, 'str'], N = t => [t, 'num'], C = t => [t, 'com'], T = t => [t, 'type'], V = t => [t, 'id'], O = t => [t, 'op'];
+  const q = lang === 1 ? "'" : '"';
+  const str = () => S(q + pick(STRS) + q);
+  const args = () => { const a = [], n = Math.floor(rng() * 3); for (let i = 0; i < n; i++) { if (i) a.push(O(', ')); a.push(rng() < 0.6 ? V(nm()) : N(num())); } return a; };
+  const call = () => [F(nm()), O('('), ...args(), O(')')];
+  const expr = () => {
+    const r = rng();
+    if (r < 0.24) return call();
+    if (r < 0.38) return [V(nm()), O(pick([' * ', ' + ', ' - ', ' / '])), N(num())];
+    if (r < 0.48) return [str()];
+    if (r < 0.62) return [V(nm()), O('.'), F(nm()), O('('), ...args(), O(')')];
+    if (r < 0.74) return lang === 0 ? [K('new '), T(pick(TYPES)), O('('), ...args(), O(')')]
+      : lang === 1 ? [T(pick(TYPES)), O('('), ...args(), O(')')] : [T(pick(TYPES)), O('::'), F('new'), O('('), ...args(), O(')')];
+    if (r < 0.86) return lang === 2 ? [...call(), O('?')] : [K('await '), ...call()];
+    return [O('['), N(num()), O(', '), N(num()), O(']')];
+  };
+  const cond = () => {
+    const r = rng();
+    if (r < 0.4) return [V(nm()), O(pick([' > ', ' < ', ' >= '])), N(num())];
+    if (r < 0.7) return lang === 1 ? [K('not '), V(nm())] : [O('!'), V(nm()), O('.'), F(lang === 2 ? 'is_empty' : 'isEmpty'), O('()')];
+    return [V(nm()), O(lang === 0 ? ' === ' : ' == '), str()];
+  };
+  const params = () => {
+    const a = [], n = Math.floor(rng() * 3);
+    for (let i = 0; i < n; i++) {
+      if (i) a.push(O(', '));
+      a.push(V(nm()));
+      if (lang === 0) a.push(O(': '), T(pick(TYPES))); else if (lang === 2) a.push(O(': &'), T(pick(TYPES)));
+    }
+    return a;
+  };
+  return {
+    comment: () => [C((lang === 1 ? '# ' : '// ') + pick(NOTES))],
+    top() {
+      if (rng() < 0.5) return lang === 0 ? [K('import '), O('{ '), T(pick(TYPES)), O(', '), V(nm()), O(' } '), K('from '), S(q + './' + pick(WORDS) + q), O(';')]
+        : lang === 1 ? [K('from '), V(pick(WORDS)), K(' import '), T(pick(TYPES))]
+        : [K('use '), V('crate'), O('::'), V(pick(WORDS)), O('::'), T(pick(TYPES)), O(';')];
+      return lang === 0 ? [K('const '), V(UP()), O(' = '), N(num()), O(';')] : lang === 1 ? [V(UP()), O(' = '), N(num())]
+        : [K('const '), V(UP()), O(': '), T('f32'), O(' = '), N(num()), O(';')];
+    },
+    open(d) {
+      const r = rng();
+      if (d === 0) {
+        if (lang === 0) return r < 0.7 ? [K('export function '), F(nm()), O('('), ...params(), O('): '), T(pick(TYPES)), O(' {')] : [K('export class '), T(pick(TYPES)), O(' {')];
+        if (lang === 1) return r < 0.7 ? [K('def '), F(nm()), O('('), ...params(), O('):')] : [K('class '), T(pick(TYPES)), O('('), T(pick(TYPES)), O('):')];
+        return r < 0.7 ? [K('pub fn '), F(nm()), O('('), ...params(), O(') -> '), T(pick(TYPES)), O(' {')] : [K('impl '), T(pick(TYPES)), O(' {')];
+      }
+      const o = lang === 1 ? ':' : ' {';
+      if (r < 0.5) return lang === 0 ? [K('if '), O('('), ...cond(), O(')' + o)] : [K('if '), ...cond(), O(o)];
+      if (r < 0.85) return lang === 0 ? [K('for '), O('('), K('const '), V(nm()), K(' of '), V(nm()), O(')' + o)] : [K('for '), V(nm()), K(' in '), V(nm()), O(o)];
+      return lang === 2 ? [K('match '), V(nm()), O(o)] : lang === 1 ? [K('while '), ...cond(), O(o)] : [K('while '), O('('), ...cond(), O(')' + o)];
+    },
+    stmt() {
+      const r = rng(), semi = lang === 1 ? [] : [O(';')];
+      if (r < 0.34) return lang === 0 ? [K('const '), V(nm()), O(' = '), ...expr(), ...semi] : lang === 1 ? [V(nm()), O(' = '), ...expr()] : [K('let '), V(nm()), O(' = '), ...expr(), ...semi];
+      if (r < 0.48) return lang === 0 ? [K('let '), V(nm()), O(': '), T(pick(TYPES)), O(' = '), ...expr(), ...semi]
+        : lang === 1 ? [V(nm()), O(' += '), N(num())] : [K('let mut '), V(nm()), O(' = '), ...expr(), ...semi];
+      if (r < 0.68) return [V(nm()), O('.'), F(nm()), O('('), ...args(), O(')'), ...semi];
+      if (r < 0.84) return [K('return '), ...expr(), ...semi];
+      return lang === 2 ? [F('println!'), O('('), S('"{}"'), O(', '), V(nm()), O(')'), ...semi]
+        : lang === 1 ? [F('print'), O('('), V(nm()), O(')')] : [F('console.log'), O('('), V(nm()), O(')'), ...semi];
+    },
+  };
+}
+function genLines(count, lang, sd) {
+  const rng = mulberry32(sd), g = makeGen(rng, lang), out = [], blk = [];
+  const push = (toks, ind) => out.push({ ind, toks });
+  while (out.length < count) {
+    const d = blk.length;
+    if (d === 0) {
+      const r = rng();
+      if (r < 0.18) push([], 0); else if (r < 0.32) push(g.comment(), 0); else if (r < 0.44) push(g.top(), 0);
+      else { push(g.open(0), 0); blk.push(3 + Math.floor(rng() * 8)); }
+      continue;
+    }
+    if (blk[d - 1] <= 0) { blk.pop(); if (lang !== 1) push([['}', 'op']], d - 1); else if (d === 1) push([], 0); continue; }
+    blk[d - 1]--;
+    const r = rng();
+    if (r < 0.14 && d < 4) { push(g.open(d), d); blk.push(1 + Math.floor(rng() * 4)); }
+    else if (r < 0.22) push(g.comment(), d);
+    else if (r < 0.26) push([], d);
+    else push(g.stmt(), d);
+  }
+  return out;
+}
+
+/* ======================================================================
+   排版：编辑器按虚拟桌面分成几栏，同一个文件从第一栏往下、再接到下一栏
+   ====================================================================== */
+let FONT = '', CW = 7.8, LH = 20, LAY = null;
+let file = [], fileKey = '';
+function setFont() {
+  FONT = `${P.font}px "Cascadia Mono", "Cascadia Code", Consolas, "Courier New", monospace`;
+  ctx.font = FONT; CW = ctx.measureText('0').width || P.font * 0.6; LH = Math.round(P.font * 1.6);
+}
+function layout() {
+  const VB = deskBounds(), n = Math.max(1, Math.round(VB.w / 900));
+  return { VB, n, PW: VB.w / n, top: VB.y + TAB_H + 6, R: Math.max(4, Math.floor((VB.h - TAB_H - 10) / LH)), GW: CW * 5 + 22 };
+}
+function ensureFile(count) {
+  const key = `${seed}|${P.lang}|${count}`;
+  if (key === fileKey) return;
+  fileKey = key; file = genLines(count, P.lang, seed ^ 0x1de);
+}
+function paneRight(i, x1) { return x1 - (i === LAY.n - 1 && P.minimap ? MMW + 16 : 10); }
+function drawToks(c, toks, x, y, pal, maxChars) {
+  let cx = x, n = 0;
+  for (const [t, k] of toks) {
+    let txt = t;
+    if (maxChars !== undefined) { if (n >= maxChars) break; if (n + t.length > maxChars) txt = t.slice(0, maxChars - n); }
+    c.fillStyle = pal.t[k]; c.fillText(txt, cx, y);
+    cx += txt.length * CW; n += txt.length;
+  }
+  return cx;
+}
+const FILES = ['world', 'desk', 'icons', 'shore', 'theme', 'cache'];
+function tabNames(i) {
+  const r = mulberry32(seed + i * 31), names = ['world' + EXT[P.lang]];
+  for (let k = 0; k < 2; k++) names.push(FILES[1 + Math.floor(r() * (FILES.length - 1))] + EXT[P.lang]);
+  return names;
+}
+
+/* ======================================================================
+   静态缓存：代码、标签栏、选区
+   ====================================================================== */
+const Lc = [0, 1, 2].map(() => document.createElement('canvas'));
+let cur = 0, old = -1, morphT0 = 0, cacheOK = false;
+function renderCache(dst, full) {
+  dst.width = cv.width; dst.height = cv.height;
+  const c = dst.getContext('2d', { alpha: false }), s = cv._scale, pal = PALS[P.palette], L = LAY;
+  c.fillStyle = pal.bg; c.fillRect(0, 0, dst.width, dst.height);
+  c.setTransform(s, 0, 0, s, 0, 0);
+  c.font = FONT; c.textBaseline = 'middle';
+  const tabY = L.VB.y - MON.y, top = L.top - MON.y;
+  for (let i = 0; i < L.n; i++) {
+    const x0 = L.VB.x + i * L.PW - MON.x, x1 = x0 + L.PW;
+    if (x1 < 0 || x0 > W) continue;
+    const right = paneRight(i, x1);
+    if (tabY + TAB_H > 0) {                                     // 标签栏
+      c.fillStyle = pal.tab; c.fillRect(x0, tabY, L.PW, TAB_H);
+      let tx = x0;
+      tabNames(i).forEach((name, j) => {
+        const tw = Math.max(112, name.length * CW + 46);
+        if (j === 0) { c.fillStyle = pal.tabOn; c.fillRect(tx, tabY, tw, TAB_H); c.fillStyle = pal.cursor; c.fillRect(tx, tabY, tw, 2); }
+        c.textAlign = 'left'; c.fillStyle = j === 0 ? pal.tabFgOn : pal.tabFg; c.fillText(name, tx + 16, tabY + TAB_H / 2 + 1);
+        c.fillStyle = pal.sep; c.fillRect(tx + tw - 1, tabY + 8, 1, TAB_H - 16);
+        tx += tw;
+      });
+    }
+    if (i > 0) { c.fillStyle = pal.sep; c.fillRect(x0 - 1, tabY, 2, L.VB.h); }
+    if (i === L.n - 1 && P.minimap) { c.fillStyle = pal.mmBg; c.fillRect(x1 - MMW - 12, top - 6, MMW + 12, L.VB.h); }
+    c.save(); c.beginPath(); c.rect(x0, top - 4, right - x0, L.VB.h); c.clip();
+    const r0 = Math.max(0, Math.floor(-top / LH)), r1 = Math.min(L.R - 1, Math.ceil((H - top) / LH)), xt = x0 + L.GW;
+    for (let r = r0; r <= r1; r++) {
+      const ln = i * L.R + r, line = file[ln], y = top + r * LH + LH / 2;
+      c.textAlign = 'right'; c.fillStyle = pal.ln; c.fillText(String(ln + 1), xt - 18, y);
+      c.textAlign = 'left';
+      if (!line) continue;
+      c.fillStyle = pal.guide;
+      for (let j = 0; j < line.ind; j++) c.fillRect(xt + j * IND() * CW + 0.5, y - LH / 2, 1, LH);
+      drawToks(c, line.toks, xt + line.ind * IND() * CW, y, pal);
+    }
+    c.restore();
+  }
+  // 图标：像被选中的代码块，代码让开（所有选区合成一块，重叠处没有接缝）
+  if (full && icons.length) {
+    const path = g => { c.beginPath(); for (const ic of icons) c.roundRect(ic.x - 6 - g, ic.y - 3 - g, ic.w + 12 + 2 * g, ic.h + 6 + 2 * g, 6 + g); };
+    c.fillStyle = pal.selEdge; path(1); c.fill();
+    c.fillStyle = pal.selSolid; path(0); c.fill();
+  }
+  c.setTransform(1, 0, 0, 1, 0, 0);
+}
+function morphE(now) { return old < 0 ? 1 : Math.min(1, (now - morphT0) / MORPH_MS); }
+function flatten(dst, now) {
+  dst.width = cv.width; dst.height = cv.height;
+  const c = dst.getContext('2d', { alpha: false });
+  c.drawImage(Lc[cur], 0, 0);
+  c.globalAlpha = 1 - ease(morphE(now)); c.drawImage(Lc[old], 0, 0); c.globalAlpha = 1;
+}
+function prepare() {
+  setFont(); LAY = layout();
+  ensureFile(LAY.n * LAY.R * 3);
+  ensureMinimap();
+}
+let iconsSeen = !(WALL || PREVIEW);
+function commit(fromEmpty) {
+  const now = performance.now();
+  prepare();
+  typ = null;
+  let from = -1;
+  if (fromEmpty) { from = cur === 0 ? 1 : 0; renderCache(Lc[from], false); }
+  else if (cacheOK && old >= 0 && morphE(now) < 1) { from = [0, 1, 2].find(i => i !== cur && i !== old); flatten(Lc[from], now); }
+  else if (cacheOK) from = cur;
+  cur = [0, 1, 2].find(i => i !== from);
+  renderCache(Lc[cur], true);
+  old = STILL ? -1 : from; morphT0 = now; cacheOK = true;
+  if (paused) { old = -1; draw(now); }
+}
+
+/* ======================================================================
+   小地图：整个文件（比屏幕上显示的更长）画成一条条色块，按系统时钟慢慢滚动，各显示器同步
+   ====================================================================== */
+const mmCv = document.createElement('canvas');
+let mmKey = '';
+function ensureMinimap() {
+  const s = cv._scale, M = file.length, key = `${fileKey}|${s}|${P.palette}`;
+  if (key === mmKey) return;
+  mmKey = key;
+  const h = Math.min(M * 2, Math.floor(16000 / s));
+  mmCv.width = Math.ceil(MMW * s); mmCv.height = Math.max(1, Math.ceil(h * s)); mmCv._s = s;
+  const c = mmCv.getContext('2d'), pal = PALS[P.palette];
+  c.setTransform(s, 0, 0, s, 0, 0); c.globalAlpha = 0.6;
+  for (let i = 0; i < M && i * 2 < h; i++) {
+    let x = file[i].ind * IND() * 0.9;
+    for (const [t, k] of file[i].toks) {
+      const w = t.length * 0.9;
+      if (t.trim()) { c.fillStyle = pal.t[k]; c.fillRect(x, i * 2, Math.min(w, MMW - x), 1.3); }
+      x += w; if (x > MMW) break;
+    }
+  }
+}
+function drawMinimap(t) {
+  if (!P.minimap || !mmCv._s) return;
+  const L = LAY, pal = PALS[P.palette], x = L.VB.x + L.VB.w - MMW - 8 - MON.x;
+  if (x > W || x + MMW < 0) return;
+  const y = L.top - MON.y, total = mmCv.height / mmCv._s;
+  const h = Math.max(0, Math.min(total, L.VB.y + L.VB.h - TASKBAR - 8 - L.top));
+  const off = Math.max(0, total - h) * (0.5 - 0.5 * Math.cos(t * 2 * Math.PI / 150));
+  ctx.drawImage(mmCv, 0, off * mmCv._s, mmCv.width, h * mmCv._s, x, y, MMW, h);
+  const vy = y + (L.n - 1) * L.R * 2 - off;
+  if (vy + L.R * 2 > y && vy < y + h) { ctx.fillStyle = pal.mmView; ctx.fillRect(x - 4, Math.max(y, vy), MMW + 8, Math.min(vy + L.R * 2, y + h) - Math.max(y, vy)); }
+}
+
+/* ======================================================================
+   打字：光标在一行空着的位置上打出新代码；偶尔出现红色波浪线，随后被改好（每块屏幕各一个光标，像多光标编辑）
+   ====================================================================== */
+let typ = null, typRng = mulberry32(1), typGen = null;
+function resetTyping() { typRng = mulberry32((seed ^ 0x7e57) + monSalt()); typGen = makeGen(typRng, P.lang); typ = null; }
+function pickRow() {
+  const L = LAY, cands = [];
+  for (let i = 0; i < L.n; i++) {
+    const x0 = L.VB.x + i * L.PW - MON.x, xt = x0 + L.GW, xr = Math.min(paneRight(i, x0 + L.PW), xt + 60 * CW);
+    if (x0 < -1 || xr > W) continue;                            // 整行都要在这块屏幕上
+    const top = L.top - MON.y;
+    for (let r = 0; r < L.R; r++) {
+      const y = top + r * LH;
+      if (y < 4 || y + LH > H - TASKBAR - 4) continue;
+      if (icons.some(ic => ic.x - 10 < xr && ic.x + ic.w + 10 > x0 && ic.y - 8 < y + LH && ic.y + ic.h + 8 > y)) continue;
+      cands.push({ i, r, x0, xt, y });
+    }
+  }
+  return cands.length ? cands[Math.floor(typRng() * cands.length)] : null;
+}
+function stepTyping(t) {
+  if (!P.typing || !typGen) { typ = null; return; }
+  if (typ && t - typ.t0 > typ.end + 1.3) typ = null;
+  if (typ) return;
+  const row = pickRow();
+  if (!row) return;
+  const ln = row.i * LAY.R + row.r, ind = file[ln] ? Math.max(1, file[ln].ind) : 1;
+  const toks = typRng() < 0.15 ? typGen.comment() : typGen.stmt();
+  const n = toks.reduce((a, [x]) => a + x.length, 0);
+  let err = -1;
+  if (typRng() < 0.55) { const idx = toks.map((tk, j) => j).filter(j => j > 0 && (toks[j][1] === 'fn' || toks[j][1] === 'id')); if (idx.length) err = idx[Math.floor(typRng() * idx.length)]; }
+  const typeDur = n / 14 * (0.8 + 0.4 * typRng()), errDur = err >= 0 ? 1.8 : 0;
+  typ = { row, ln, ind, toks, n, t0: t, typeDur, err, errDur, end: typeDur + errDur + 2.5 + 2 * typRng() };
+}
+function drawTyping(t) {
+  if (!typ) return;
+  const pal = PALS[P.palette], e = t - typ.t0, R = typ.row;
+  const fade = e > typ.end ? Math.max(0, 1 - (e - typ.end) / 0.5) : Math.min(1, e / 0.15);
+  if (fade <= 0) return;
+  ctx.globalAlpha = fade;
+  ctx.fillStyle = pal.cur; ctx.fillRect(R.x0, R.y, paneRight(R.i, R.x0 + LAY.PW) - R.x0, LH);
+  ctx.font = FONT; ctx.textBaseline = 'middle';
+  const y = R.y + LH / 2;
+  ctx.textAlign = 'right'; ctx.fillStyle = pal.lnCur; ctx.fillText(String(typ.ln + 1), R.xt - 18, y); ctx.textAlign = 'left';
+  ctx.fillStyle = pal.guide; for (let j = 0; j < typ.ind; j++) ctx.fillRect(R.xt + j * IND() * CW + 0.5, R.y, 1, LH);
+  const x0 = R.xt + typ.ind * IND() * CW;
+  const chars = Math.min(typ.n, Math.floor(typ.n * Math.min(1, e / typ.typeDur)));
+  const xe = drawToks(ctx, typ.toks, x0, y, pal, chars);
+  if (typ.err >= 0 && e > typ.typeDur && e < typ.typeDur + typ.errDur) {      // 红色波浪线
+    let xs = x0;
+    for (let j = 0; j < typ.err; j++) xs += typ.toks[j][0].length * CW;
+    const w = typ.toks[typ.err][0].length * CW, yy = y + P.font * 0.62;
+    ctx.strokeStyle = pal.err; ctx.lineWidth = 1.2; ctx.beginPath();
+    for (let x = 0, k = 0; x <= w; x += 2.5, k++) ctx.lineTo(xs + x, yy + (k % 2 ? 1.3 : -1.3));
+    ctx.stroke();
+  }
+  const on = e < typ.typeDur || Math.floor(e * 1.8) % 2 === 0;
+  if (on && e < typ.end) { ctx.fillStyle = pal.cursor; ctx.fillRect(xe, y - LH * 0.38, 2, LH * 0.76); }
+  ctx.globalAlpha = 1;
+}
+
+/* ======================================================================
+   尺寸 / 主循环
+   ====================================================================== */
+function resize() {
+  const box = cv.getBoundingClientRect();
+  W = box.width || innerWidth; H = box.height || innerHeight;
+  const scale = PREVIEW ? 0.5 : (devicePixelRatio || 1);
+  cv.width = Math.round(W * scale); cv.height = Math.round(H * scale); cv._scale = scale;
+  cacheOK = false;
+}
+let simT = 0, lastT = 0, frameN = 0, paused = false;
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (paused) { lastT = 0; return; }
+  if (lastT && now - lastT < 31) return;                 // 30fps
+  const dt = lastT ? Math.min((now - lastT) / 1000, 0.1) : 0.033;
+  lastT = now;
+  simT += dt;
+  if (iconsSeen) stepTyping(simT);
+  draw(now);
+  frameN++;
+}
+function draw(now) {
+  const s = cv._scale;
+  if (!iconsSeen) { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = PALS[P.palette].bg; ctx.fillRect(0, 0, cv.width, cv.height); return; }
+  if (!LAY) prepare();
+  if (!cacheOK || Lc[cur].width !== cv.width || Lc[cur].height !== cv.height) { ensureMinimap(); renderCache(Lc[cur], true); old = -1; cacheOK = true; }
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1;
+  ctx.drawImage(Lc[cur], 0, 0);
+  if (old >= 0) {
+    const e = morphE(now);
+    if (e < 1) { ctx.globalAlpha = 1 - ease(e); ctx.drawImage(Lc[old], 0, 0); ctx.globalAlpha = 1; }
+    else old = -1;
+  }
+  ctx.setTransform(s, 0, 0, s, 0, 0);
+  drawMinimap(wallClock());
+  drawTyping(simT);
+}
+
+/* ======================================================================
+   浏览器里单独打开：示例图标，可以拖
+   ====================================================================== */
+const desktop = document.getElementById('desktop');
+const SAMPLE = [['回收站', '#7b8fb5'], ['此电脑', '#2f7de1'], ['项目资料', '#e3a32f'], ['设计稿', '#db2777'], ['周报.xlsx', '#107c41'],
+  ['合同.pdf', '#d33a2c'], ['Chrome', '#f59e0b'], ['VS Code', '#2563eb'], ['Figma', '#8b5cf6'], ['Steam', '#334155'],
+  ['照片', '#0ea5a4'], ['下载', '#e3a32f'], ['笔记.txt', '#64748b'], ['Blender', '#ea7a1e'], ['OBS', '#4b5563']];
+let grid = { cols: 1, rows: 1 }, drag = null;
+const cellPos = (c, r) => ({ x: GRID_X0 + c * CELL_W, y: GRID_Y0 + r * CELL_H });
+function addIcon([name, color], pos) {
+  const el = document.createElement('div');
+  el.className = 'icon';
+  el.innerHTML = `<div class="glyph" style="background:${color}">${[...name][0]}</div><div class="label">${name}</div>`;
+  el.style.left = pos.x + 'px'; el.style.top = pos.y + 'px';
+  desktop.appendChild(el);
+  const ic = { x: pos.x, y: pos.y, w: el.offsetWidth, h: el.offsetHeight, el };
+  icons.push(ic);
+  el.addEventListener('pointerdown', e => { if (e.button) return; el.setPointerCapture(e.pointerId); el.classList.remove('settle'); drag = { ic, sx: e.clientX, sy: e.clientY, ox: ic.x, oy: ic.y }; });
+  el.addEventListener('pointermove', e => { if (!drag || drag.ic !== ic) return; el.classList.add('drag'); el.style.left = drag.ox + e.clientX - drag.sx + 'px'; el.style.top = drag.oy + e.clientY - drag.sy + 'px'; });
+  el.addEventListener('pointerup', e => {
+    if (!drag || drag.ic !== ic) return;
+    const d = drag; drag = null; el.classList.remove('drag');
+    const cx = d.ox + e.clientX - d.sx + ic.w / 2, cy = d.oy + e.clientY - d.sy + ic.h / 2;
+    let best = null, bd = Infinity;
+    for (let c = 0; c < grid.cols; c++) for (let r = 0; r < grid.rows; r++) {
+      const p = cellPos(c, r);
+      if (icons.some(o => o !== ic && Math.abs(o.x - p.x) < 2 && Math.abs(o.y - p.y) < 2)) continue;
+      const dd = Math.hypot(p.x + CELL_W / 2 - cx, p.y + CELL_H / 2 - cy);
+      if (dd < bd) { bd = dd; best = p; }
+    }
+    if (!best) best = { x: d.ox, y: d.oy };
+    el.classList.add('settle'); ic.x = best.x; ic.y = best.y; el.style.left = best.x + 'px'; el.style.top = best.y + 'px';
+    if (best.x !== d.ox || best.y !== d.oy) commit(false);
+  });
+  return ic;
+}
+function sampleLayout() {
+  grid.cols = Math.max(1, Math.floor((W - GRID_X0) / CELL_W)); grid.rows = Math.max(1, Math.floor((H - TASKBAR - GRID_Y0) / CELL_H));
+  const cells = [];
+  for (let r = 0; r < Math.min(6, grid.rows); r++) cells.push([0, r]);
+  for (let r = 0; r < Math.min(3, grid.rows); r++) cells.push([1, r]);
+  const mc = Math.floor(grid.cols * 0.55), mr = Math.floor(grid.rows * 0.35);
+  for (const [dc, dr] of [[0, 0], [1, 0], [0, 1]]) cells.push([mc + dc, mr + dr]);
+  let i = 0;
+  for (const [c, r] of cells) if (c < grid.cols && r < grid.rows) addIcon(SAMPLE[i++ % SAMPLE.length], cellPos(c, r));
+}
+const hint = document.getElementById('hint');
+addEventListener('keydown', e => {
+  if (WALL || PREVIEW) return;
+  const k = e.key.toLowerCase();
+  if (k === 'r') reseed((Math.random() * 1e6) | 0);
+  else if (k === 'h') hint.classList.toggle('hidden');
+  else if (k === 'p') { P.palette = (P.palette + 1) % 3; commit(false); }
+  else if (k === 'g') { P.lang = (P.lang + 1) % 3; resetTyping(); commit(false); }
+});
+let resizeT = 0;
+addEventListener('resize', () => {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(() => { resize(); if (iconsSeen) commit(false); }, 100);
+});
+
+/* ======================================================================
+   托管模式：icons / settings / reset / pause，另外 screens：把几块屏幕拼成同一个编辑器
+   ====================================================================== */
+function reseed(v) { seed = v; resetTyping(); if (iconsSeen) commit(true); }
+function applySettings(v) {
+  if (typeof v.seed === 'number' && v.seed !== seed) reseed(v.seed);
+  let dirty = false;
+  for (const k in v) {
+    if (!(k in LIMITS) || typeof v[k] !== 'number' || !isFinite(v[k])) continue;
+    const x = Math.round(clamp(v[k], LIMITS[k][0], LIMITS[k][1]));
+    if (P[k] === x) continue;
+    P[k] = x;
+    if (k === 'lang') resetTyping();
+    if (k !== 'typing') dirty = true;
+  }
+  if (dirty && iconsSeen) commit(false);
+}
+function setScreens(m) {
+  if (!Array.isArray(m.me) || !Array.isArray(m.all)) return;
+  const k = devicePixelRatio || 1;
+  MON = { x: m.me[0] / k, y: m.me[1] / k };
+  SCREENS = m.all.filter(r => Array.isArray(r) && r.length === 4).map(r => r.map(v => v / k));
+  layoutN++; resetTyping();
+  if (iconsSeen) commit(false);
+}
+function drawGhosts() {
+  document.getElementById('ghosts').innerHTML = icons.map(ic => `<div class="ghost" style="left:${ic.x}px;top:${ic.y}px;width:${ic.w}px;height:${ic.h}px"><i></i><b></b></div>`).join('');
+}
+function startHostedMode() {
+  document.body.classList.add('wall');
+  if (PREVIEW) {
+    document.body.classList.add('preview');
+    const g = document.createElement('div'); g.id = 'ghosts'; document.body.appendChild(g);
+  }
+  icons = [];
+  let first = true;
+  const handle = m => {
+    if (m.t === 'pause') { paused = PREVIEW ? false : !!m.v; return; }
+    if (m.t === 'screens') { setScreens(m); return; }
+    if (m.t === 'settings') { applySettings(m.v || {}); return; }
+    if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
+    if (m.t !== 'icons') return;
+    const k = window.devicePixelRatio || 1;
+    icons = m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : [];
+    if (PREVIEW) drawGhosts();
+    iconsSeen = true;
+    commit(first);
+    first = false;
+  };
+  if (PREVIEW) {
+    addEventListener('message', ev => { if (ev.source === parent) handle(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data); });
+    parent.postMessage(JSON.stringify({ t: 'ready' }), '*');
+    return;
+  }
+  const host = window.chrome && window.chrome.webview;
+  if (!host) return;
+  host.addEventListener('message', ev => handle(JSON.parse(ev.data)));
+  host.postMessage('ready');
+}
+
+/* ---------- 启动 ---------- */
+window.__dbg = {
+  P, commit, reseed,
+  bench() {
+    const ts = [];
+    for (let i = 0; i < 10; i++) { const a = performance.now(); draw(performance.now()); ts.push(performance.now() - a); }
+    ts.sort((a, b) => a - b);
+    const a = performance.now(); commit(false); const c = performance.now() - a;
+    return { frame: +ts[5].toFixed(2), commit: +c.toFixed(1), canvas: cv.width + 'x' + cv.height };
+  },
+};
+resize();
+resetTyping();
+if (WALL || PREVIEW) startHostedMode();
+else { sampleLayout(); commit(true); }
+requestAnimationFrame(frame);
+</script>
+<script src="share.js"></script>   <!-- 分享图片 / 分享动画（示例图标、名字是色块） -->
+</body>
+</html>

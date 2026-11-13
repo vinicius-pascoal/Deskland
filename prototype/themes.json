@@ -366,6 +366,214 @@
       ]
     },
     {
+      "id": "ide",
+      "name": "代码编辑器",
+      "desc": "整面桌面是一个深色编辑器，图标像被选中的代码块；光标打出新代码，偶尔出错再改好，多个显示器连成同一个文件",
+      "page": "ide.html",
+      "status": "ready",
+      "product": "free",
+      "thumb": "linear-gradient(#c678dd, #c678dd) 20% 18% / 14% 5% no-repeat, linear-gradient(#61afef, #61afef) 44% 18% / 24% 5% no-repeat, linear-gradient(#98c379, #98c379) 28% 32% / 30% 5% no-repeat, linear-gradient(#e5c07b, #e5c07b) 28% 46% / 20% 5% no-repeat, linear-gradient(#5c6370, #5c6370) 20% 60% / 36% 5% no-repeat, linear-gradient(#e06c75, #e06c75) 28% 74% / 24% 5% no-repeat, linear-gradient(#41608f, #41608f) 76% 42% / 24% 42% no-repeat, linear-gradient(90deg, #171a21 0 11%, #1b1f27 11%)",
+      "groups": [
+        {
+          "name": "编辑器",
+          "params": [
+            {
+              "key": "palette",
+              "label": "配色",
+              "hint": "编辑器的配色",
+              "options": [
+                "深夜",
+                "暖色",
+                "浅色"
+              ],
+              "default": 0
+            },
+            {
+              "key": "lang",
+              "label": "语言",
+              "hint": "虚构代码用哪种语言的写法",
+              "options": [
+                "TypeScript",
+                "Python",
+                "Rust"
+              ],
+              "default": 0
+            },
+            {
+              "key": "font",
+              "label": "字号",
+              "hint": "代码文字的大小",
+              "min": 11,
+              "max": 18,
+              "step": 1,
+              "default": 13,
+              "unit": "px"
+            }
+          ]
+        },
+        {
+          "name": "动画",
+          "params": [
+            {
+              "key": "typing",
+              "label": "打字",
+              "hint": "光标在空着的地方打出新代码，偶尔出现红色波浪线再改好",
+              "options": [
+                "关闭",
+                "开启"
+              ],
+              "default": 1
+            },
+            {
+              "key": "minimap",
+              "label": "小地图",
+              "hint": "最右边慢慢滚动的代码缩略图",
+              "options": [
+                "隐藏",
+                "显示"
+              ],
+              "default": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "terminal",
+      "name": "复古终端",
+      "desc": "荧光屏终端：图标住在 ASCII 窗口里，窗口外面滚着编译、测试和部署日志，偶尔冒出 ASCII 画",
+      "page": "terminal.html",
+      "status": "ready",
+      "product": "free",
+      "thumb": "linear-gradient(#58ff8c, #58ff8c) 8% 14% / 42% 5% no-repeat, linear-gradient(rgba(88,255,140,0.55), rgba(88,255,140,0.55)) 8% 27% / 56% 5% no-repeat, linear-gradient(rgba(88,255,140,0.55), rgba(88,255,140,0.55)) 8% 40% / 34% 5% no-repeat, linear-gradient(#58ff8c, #58ff8c) 8% 53% / 48% 5% no-repeat, linear-gradient(rgba(88,255,140,0.4), rgba(88,255,140,0.4)) 8% 66% / 38% 5% no-repeat, linear-gradient(#030d07, #030d07) 82% 34% / 22% 36% no-repeat, linear-gradient(#58ff8c, #58ff8c) 82% 30% / 26% 44% no-repeat, linear-gradient(rgba(88,255,140,0.85), rgba(88,255,140,0.85)) 0 100% / 100% 8% no-repeat, repeating-linear-gradient(180deg, rgba(0,0,0,0.3) 0 1px, transparent 1px 3px), radial-gradient(ellipse at center, #062413 0%, #030d07 75%)",
+      "groups": [
+        {
+          "name": "屏幕",
+          "params": [
+            {
+              "key": "phosphor",
+              "label": "荧光色",
+              "hint": "老式显示器的荧光颜色",
+              "options": [
+                "绿色",
+                "琥珀",
+                "冰蓝"
+              ],
+              "default": 0
+            },
+            {
+              "key": "crt",
+              "label": "CRT 效果",
+              "hint": "扫描线、暗角和文字辉光有多明显",
+              "min": 0,
+              "max": 1,
+              "step": 0.01,
+              "default": 0.6,
+              "format": "percent"
+            },
+            {
+              "key": "font",
+              "label": "字号",
+              "hint": "终端文字的大小",
+              "min": 11,
+              "max": 18,
+              "step": 1,
+              "default": 14,
+              "unit": "px"
+            }
+          ]
+        },
+        {
+          "name": "日志",
+          "params": [
+            {
+              "key": "speed",
+              "label": "滚动速度",
+              "hint": "命令和日志出现得多快",
+              "min": 0.25,
+              "max": 3,
+              "step": 0.05,
+              "default": 1,
+              "format": "times"
+            },
+            {
+              "key": "art",
+              "label": "ASCII 画",
+              "hint": "小猫、火箭等 ASCII 画出现得多频繁",
+              "options": [
+                "不出现",
+                "偶尔",
+                "经常"
+              ],
+              "default": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "gitgraph",
+      "name": "Git 分支图",
+      "desc": "提交图当风景：图标是提交，一条条分支绕着图标走；main 横穿所有显示器，新分支不时长出来再合并回去",
+      "page": "gitgraph.html",
+      "status": "ready",
+      "product": "free",
+      "thumb": "radial-gradient(circle 10px at 22% 22%, #0d1117 0 6px, #f778ba 6.5px 9px, transparent 9.5px), radial-gradient(circle 10px at 22% 50%, #0d1117 0 6px, #f778ba 6.5px 9px, transparent 9.5px), radial-gradient(circle 10px at 34% 22%, #0d1117 0 6px, #f778ba 6.5px 9px, transparent 9.5px), radial-gradient(circle 10px at 64% 32%, #0d1117 0 6px, #7ee787 6.5px 9px, transparent 9.5px), radial-gradient(circle 5px at 48% 76%, #0d1117 0 2.5px, #58a6ff 3px 4.5px, transparent 5px), radial-gradient(circle 5px at 84% 76%, #0d1117 0 2.5px, #58a6ff 3px 4.5px, transparent 5px), linear-gradient(#f778ba, #f778ba) 22% 26% / 2px 50% no-repeat, linear-gradient(#f778ba, #f778ba) 25% 22% / 12% 2px no-repeat, linear-gradient(#7ee787, #7ee787) 64.2% 50% / 2px 46% no-repeat, linear-gradient(#58a6ff, #58a6ff) 0 76% / 100% 3px no-repeat, #0d1117",
+      "groups": [
+        {
+          "name": "画面",
+          "params": [
+            {
+              "key": "palette",
+              "label": "配色",
+              "hint": "深色或浅色背景",
+              "options": [
+                "深色",
+                "浅色"
+              ],
+              "default": 0
+            },
+            {
+              "key": "labels",
+              "label": "标签",
+              "hint": "提交哈希、分支名和版本标签",
+              "options": [
+                "隐藏",
+                "显示"
+              ],
+              "default": 1
+            }
+          ]
+        },
+        {
+          "name": "动画",
+          "params": [
+            {
+              "key": "activity",
+              "label": "新分支",
+              "hint": "空地上长出新分支、提交、再合并回 main 的频率",
+              "options": [
+                "不出现",
+                "偶尔",
+                "经常"
+              ],
+              "default": 1
+            },
+            {
+              "key": "pulses",
+              "label": "流动亮点",
+              "hint": "沿 main 流过的亮点数量；多个显示器时从一块屏幕流到另一块",
+              "min": 0,
+              "max": 5,
+              "step": 1,
+              "default": 2,
+              "unit": "个"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "beach-turquoise",
       "name": "马尔代夫",
       "desc": "青绿色海水与浅米黄沙滩，暗色珊瑚礁间的小鱼成群游动",

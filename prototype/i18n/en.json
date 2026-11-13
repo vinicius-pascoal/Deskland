@@ -652,6 +652,134 @@
           ]
         }
       }
+    },
+    "ide": {
+      "name": "Code Editor",
+      "desc": "Your desktop becomes a dark code editor with icons as selected blocks; a cursor types new code, fixes the odd typo, and several monitors form one file",
+      "groups": [
+        "Editor",
+        "Animation"
+      ],
+      "params": {
+        "palette": {
+          "label": "Colors",
+          "hint": "Editor color scheme",
+          "options": [
+            "Midnight",
+            "Warm",
+            "Light"
+          ]
+        },
+        "lang": {
+          "label": "Language",
+          "hint": "Which language the made-up code is written in",
+          "options": [
+            "TypeScript",
+            "Python",
+            "Rust"
+          ]
+        },
+        "font": {
+          "label": "Font size",
+          "hint": "Size of the code text"
+        },
+        "typing": {
+          "label": "Typing",
+          "hint": "A cursor types new code in open space, sometimes with a red squiggle that gets fixed",
+          "options": [
+            "Off",
+            "On"
+          ]
+        },
+        "minimap": {
+          "label": "Minimap",
+          "hint": "The slowly scrolling code overview on the far right",
+          "options": [
+            "Hide",
+            "Show"
+          ]
+        }
+      }
+    },
+    "terminal": {
+      "name": "Retro Terminal",
+      "desc": "A phosphor terminal: icons live in ASCII windows while build, test and deploy logs scroll around them, with the occasional ASCII art",
+      "groups": [
+        "Screen",
+        "Logs"
+      ],
+      "params": {
+        "phosphor": {
+          "label": "Phosphor",
+          "hint": "The glow color of an old monitor",
+          "options": [
+            "Green",
+            "Amber",
+            "Ice blue"
+          ]
+        },
+        "crt": {
+          "label": "CRT effect",
+          "hint": "How strong the scanlines, vignette and text glow are"
+        },
+        "font": {
+          "label": "Font size",
+          "hint": "Size of the terminal text"
+        },
+        "speed": {
+          "label": "Scroll speed",
+          "hint": "How fast commands and logs appear"
+        },
+        "art": {
+          "label": "ASCII art",
+          "hint": "How often cats, rockets and other ASCII art appear",
+          "options": [
+            "Never",
+            "Now and then",
+            "Often"
+          ]
+        }
+      }
+    },
+    "gitgraph": {
+      "name": "Git Graph",
+      "desc": "A commit graph as scenery: icons are commits and branches wind around them; main runs across every monitor while new branches grow and merge back",
+      "groups": [
+        "Look",
+        "Animation"
+      ],
+      "params": {
+        "palette": {
+          "label": "Colors",
+          "hint": "Dark or light background",
+          "options": [
+            "Dark",
+            "Light"
+          ]
+        },
+        "labels": {
+          "label": "Labels",
+          "hint": "Commit hashes, branch names and version tags",
+          "options": [
+            "Hide",
+            "Show"
+          ]
+        },
+        "activity": {
+          "label": "New branches",
+          "hint": "How often a branch grows in open space, gains commits and merges back into main",
+          "options": [
+            "Never",
+            "Now and then",
+            "Often"
+          ]
+        },
+        "pulses": {
+          "label": "Pulses",
+          "hint": "Glowing dots flowing along main; with several monitors they travel from one screen to the next",
+          "unit": ""
+        }
+      }
     }
   }
 }

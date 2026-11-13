@@ -93,6 +93,9 @@ The installer targets the current user's `Programs\Deskland Preview` directory a
 | `prototype/flat.html` | Beach theme |
 | `prototype/meadow.html` | Meadow theme |
 | `prototype/desk.html` | Desk theme (one continuous desk across all monitors) |
+| `prototype/ide.html` | Code Editor theme (one file spread across all monitors) |
+| `prototype/terminal.html` | Retro Terminal theme |
+| `prototype/gitgraph.html` | Git Graph theme (main runs across all monitors) |
 | `prototype/settings.html` | Settings interface |
 | `prototype/themes.json` | Full free-theme definitions and locked-theme display metadata |
 | `prototype/share.js` | Privacy-preserving image and animation sharing |
@@ -202,6 +205,9 @@ powershell -ExecutionPolicy Bypass -File tools\build-installer.ps1
 | `prototype/flat.html` | 沙滩主题 |
 | `prototype/meadow.html` | 草地主题 |
 | `prototype/desk.html` | 书桌主题（多个显示器拼成同一张桌子） |
+| `prototype/ide.html` | 代码编辑器主题（多个显示器连成同一个文件） |
+| `prototype/terminal.html` | 复古终端主题 |
+| `prototype/gitgraph.html` | Git 分支图主题（main 横穿所有显示器） |
 | `prototype/settings.html` | 设置界面 |
 | `prototype/themes.json` | 免费主题完整定义及锁定主题展示信息 |
 | `prototype/share.js` | 隐私保护的图片和动画分享 |

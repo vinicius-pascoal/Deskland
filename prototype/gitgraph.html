@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deskland · Git 分支图（原型）</title>
+<!--
+  Deskland · Git 分支图主题（提交图当风景；Canvas 2D）
+  - main 是一条横穿桌面的时间线，按"虚拟桌面坐标"画：多个显示器时从一块屏幕连到下一块，上面的提交点、哈希、版本标签也对得上
+  - 图标是提交：挨着的图标组成一条分支，从 main 分出来，沿着图标的列走一遍，再从旁边的空隙并回 main；
+    压在 main 上的图标就是 main 上的提交，main 会弯过去穿过它们
+  - 不时有一条新分支在空地上长出来：分叉、一个个提交冒出来、再并回 main；一串亮点沿 main 流过，各显示器按系统时钟同步
+  - 哈希、分支名、版本号都是编出来的，不读取任何真实仓库
+  性能：网格、分支、提交环都画进静态缓存（图标或设置变化时重画，新旧交叉淡入）；每帧只贴缓存，再画正在长的分支和几颗亮点
+-->
+<style>
+  :root { --taskbar: 48px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0d1117; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif; }
+  #art { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #desktop { position: fixed; left: 0; top: 0; right: 0; bottom: var(--taskbar); }
+  .icon {
+    position: absolute; width: 76px; padding: 4px 2px 5px;
+    display: flex; flex-direction: column; align-items: center;
+    border: 1px solid transparent; border-radius: 4px;
+    user-select: none; touch-action: none; cursor: default;
+  }
+  .icon:hover { background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.2); }
+  .icon.drag { opacity: .88; z-index: 10; transform: scale(1.04); }
+  .icon.settle { transition: left .22s cubic-bezier(.2,.8,.3,1), top .22s cubic-bezier(.2,.8,.3,1); }
+  .glyph { width: 48px; height: 48px; border-radius: 10px; display: grid; place-items: center; color: #fff;
+    font-size: 21px; font-weight: 700; box-shadow: 0 2px 6px rgba(0,0,0,.35); pointer-events: none; }
+  .label {
+    margin-top: 3px; max-width: 72px; font-size: 12px; line-height: 15px; color: #fff; text-align: center;
+    text-shadow: 0 0 2px rgba(0,0,0,.95), 0 1px 3px rgba(0,0,0,.85);
+    word-break: break-all; overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; pointer-events: none;
+  }
+  #taskbar {
+    position: fixed; left: 0; right: 0; bottom: 0; height: var(--taskbar);
+    background: rgba(20,22,30,.62); backdrop-filter: blur(28px) saturate(1.6); -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    border-top: 1px solid rgba(255,255,255,.08); z-index: 40;
+  }
+  #hint {
+    position: fixed; top: 14px; right: 14px; padding: 10px 14px; border-radius: 10px; z-index: 50;
+    background: rgba(13,17,23,.85); color: #e6edf3; font-size: 12px; line-height: 1.6;
+    border: 1px solid rgba(255,255,255,.14); backdrop-filter: blur(16px);
+  }
+  #hint.hidden { display: none; }
+  body.wall #desktop, body.wall #taskbar, body.wall #hint { display: none; }
+  #ghosts { position: fixed; inset: 0; pointer-events: none; display: none; }
+  body.preview #ghosts { display: block; }
+  .ghost { position: absolute; }
+  .ghost i { position: absolute; left: 50%; top: 4px; width: 48px; height: 48px; margin-left: -24px; border-radius: 9px;
+    background: rgba(255,255,255,.88); box-shadow: 3px 6px 8px rgba(0,0,0,.35); }
+  .ghost b { position: absolute; left: 14%; right: 14%; top: 60px; height: 10px; border-radius: 5px; background: rgba(255,255,255,.75); }
+</style>
+</head>
+<body>
+<canvas id="art"></canvas>
+<div id="desktop"></div>
+<div id="taskbar"></div>
+<div id="hint"><b>Deskland · Git 分支图</b><br>拖动图标，分支会重新连起来<br>R 换一张 · P 换配色 · B 长一条新分支 · H 隐藏提示</div>
+
+<script>
+'use strict';
+
+/* ======================================================================
+   参数（默认值和 themes.json 里 Git 分支图主题的 default 保持一致）
+   ====================================================================== */
+const CELL_W = 76, CELL_H = 100, GRID_X0 = 4, GRID_Y0 = 6, TASKBAR = 48;
+const MORPH_MS = 1000, NODE_R = 30, STEP = 112;
+
+const QS = new URLSearchParams(location.search);
+const WALL = QS.has('wallpaper');
+const PREVIEW = QS.has('preview');
+const STILL = QS.has('still');
+const P = { palette: 0, labels: 1, activity: 1, pulses: 2 };
+const DEFAULTS = Object.assign({}, P);
+const LIMITS = { palette: [0, 1], labels: [0, 1], activity: [0, 2], pulses: [0, 5] };
+
+const cv = document.getElementById('art');
+const ctx = cv.getContext('2d', { alpha: false });
+let W = innerWidth, H = innerHeight;
+let icons = [];
+let seed = QS.has('seed') ? (+QS.get('seed') | 0) : (WALL || PREVIEW) ? 20261113 : (Math.random() * 1e6) | 0;
+const FIX_NOW = QS.has('now') ? +QS.get('now') : null;
+const wallClock = () => FIX_NOW !== null ? FIX_NOW + performance.now() / 1000 : Date.now() / 1000;
+
+/* ---------- 显示器布局（CSS 像素，虚拟桌面坐标；调试：?me=x,y&all=x,y,w,h;...） ---------- */
+let MON = { x: 0, y: 0 }, SCREENS = null;
+if (QS.has('me')) { const [x, y] = QS.get('me').split(',').map(Number); MON = { x: x || 0, y: y || 0 }; }
+if (QS.has('all')) SCREENS = QS.get('all').split(';').filter(Boolean).map(s => s.split(',').map(Number));
+function screensCss() { return SCREENS && SCREENS.length ? SCREENS : [[MON.x, MON.y, W, H]]; }
+function deskBounds() {
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  for (const [x, y, w, h] of screensCss()) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x + w); y1 = Math.max(y1, y + h); }
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+const monSalt = () => (Math.round(MON.x) * 7 + Math.round(MON.y) * 13) | 0;
+
+function hash2(x, y, k) {
+  let h = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ Math.imul((seed + k) | 0, 2246822519);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function mulberry32(a) {
+  return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const ease = t => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+const backOut = t => { const c = 1.7; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); };
+const hexOf = (a, b) => (((hash2(a, b, 41) * 0xfffffff) | 0) >>> 0).toString(16).padStart(7, '0').slice(0, 7);
+
+/* ======================================================================
+   配色
+   ====================================================================== */
+const PALS = [
+  { bg: '#0d1117', grid: 'rgba(240,246,252,0.06)', main: '#58a6ff', text: '#8b949e', node: '#0d1117', pillFg: '#e6edf3', glow: 1,
+    lanes: ['#f778ba', '#7ee787', '#ffa657', '#d2a8ff', '#ffd33d', '#56d4dd'] },
+  { bg: '#f6f8fa', grid: 'rgba(31,35,40,0.09)', main: '#0969da', text: '#57606a', node: '#ffffff', pillFg: '#1f2328', glow: 0,
+    lanes: ['#bf3989', '#1a7f37', '#bc4c00', '#8250df', '#9a6700', '#1b7c83'] },
+];
+const NAMES = ['feat/shoreline', 'fix/icon-drift', 'feat/multi-monitor', 'refactor/cache', 'feat/desk-theme', 'fix/pause-race',
+  'chore/deps', 'perf/30fps', 'feat/share-video', 'fix/dpi-scale', 'feat/cat-schedule', 'docs/readme'];
+const MONO = '"Cascadia Mono", Consolas, "Courier New", monospace';
+
+/* ======================================================================
+   图的规划
+   - main 的基准高度按所有显示器共同覆盖的高度定（几块屏幕上是同一条线）
+   - 压在 main 上的图标：main 弯过去穿过它们；其余挨着的图标连成分支
+   ====================================================================== */
+let G = null;   // { y0, ctrl, main nodes, branches, ... }
+function mainBaseY() {
+  let top = -1e9, bot = 1e9;
+  for (const [, y, , h] of screensCss()) { top = Math.max(top, y); bot = Math.min(bot, y + h - TASKBAR); }
+  return bot - top > 240 ? top + (bot - top) * 0.8 : MON.y + (H - TASKBAR) * 0.8;
+}
+const nodeOf = ic => ({ x: ic.x + ic.w / 2, y: ic.y + Math.min(28, ic.h * 0.36), ic });
+function mainY(x) {
+  const c = G.ctrl;
+  if (x <= c[0][0]) return c[0][1];
+  for (let i = 0; i < c.length - 1; i++) {
+    const [x0, y0] = c[i], [x1, y1] = c[i + 1];
+    if (x <= x1) { const t = (x - x0) / Math.max(1e-6, x1 - x0); return y0 + (y1 - y0) * t * t * (3 - 2 * t); }
+  }
+  return c[c.length - 1][1];
+}
+function plan() {
+  const y0 = mainBaseY() - MON.y, nodes = icons.map(nodeOf);
+  const onMain = nodes.filter(n => Math.abs(n.y - y0) < 62).sort((a, b) => a.x - b.x);
+  const ctrl = [[-400, y0]];
+  let prev = null;
+  for (const n of onMain) {
+    if (!prev || n.x - prev.x > 100) { if (prev) ctrl.push([prev.x + 46, y0]); ctrl.push([n.x - 46, y0]); }
+    ctrl.push([n.x, n.y]); prev = n;
+  }
+  if (prev) ctrl.push([prev.x + 46, y0]);
+  ctrl.push([W + 400, y0]);
+  G = { y0, ctrl, onMain, branches: [] };
+  // 其余图标：挨着的连成一组（并查集）
+  const rest = nodes.filter(n => !onMain.includes(n)), par = rest.map((_, i) => i);
+  const find = i => par[i] === i ? i : (par[i] = find(par[i]));
+  for (let i = 0; i < rest.length; i++) for (let j = i + 1; j < rest.length; j++)
+    if (Math.abs(rest[i].x - rest[j].x) < 100 && Math.abs(rest[i].y - rest[j].y) < 130) par[find(i)] = find(j);
+  const groups = new Map();
+  rest.forEach((n, i) => { const k = find(i); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(n); });
+  let bi = 0;
+  for (const g of groups.values()) {
+    // 按列分组；第一列从离 main 近的一头走向远的一头，下一列反过来（蛇形）
+    const colsArr = [];
+    for (const n of g.slice().sort((a, b) => a.x - b.x)) {
+      const c = colsArr.find(c => Math.abs(c.x - n.x) < 30);
+      if (c) c.list.push(n); else colsArr.push({ x: n.x, list: [n] });
+    }
+    const seq = [];
+    colsArr.forEach((c, j) => {
+      c.list.sort((a, b) => Math.abs(a.y - y0) - Math.abs(b.y - y0));
+      if (j % 2) c.list.reverse();
+      seq.push(...c.list);
+    });
+    const first = seq[0], last = seq[seq.length - 1], R = 16;
+    // 分叉：从 main 上拐个弯，竖着走到离 main 最近的那个提交
+    const fy = mainY(first.x - 34), pts = [[first.x - 34, fy], [first.x, fy], [first.x, first.y]];
+    for (let i = 1; i < seq.length; i++) {
+      const a = seq[i - 1], b = seq[i];
+      if (Math.abs(a.x - b.x) < 30) pts.push([b.x, b.y]);
+      else { const mx = (a.x + b.x) / 2; pts.push([mx, a.y], [mx, b.y], [b.x, b.y]); }
+    }
+    // 并回 main：最后一个提交在这一列离 main 最近的一头就直接下去，否则从右边的空隙绕下去
+    const lastCol = colsArr[colsArr.length - 1];
+    const nearEnd = Math.abs(last.y - y0) <= Math.min(...lastCol.list.map(n => Math.abs(n.y - y0))) + 1;
+    const gx = nearEnd ? last.x : last.x + last.ic.w / 2 + 10;
+    if (!nearEnd) pts.push([gx, last.y]);
+    const my = mainY(gx + 34);
+    pts.push([gx, my], [gx + 34, my]);
+    const color = PALS[P.palette].lanes[(bi + Math.floor(hash2(first.x | 0, first.y | 0, 17 + monSalt()) * 6)) % 6];
+    G.branches.push({ seq, pts, color, R, name: NAMES[Math.floor(hash2(first.x | 0, first.y | 0, 23 + monSalt()) * NAMES.length)], fork: pts[0], merge: pts[pts.length - 1] });
+    bi++;
+  }
+}
+function roundPoly(c, pts, r) {
+  c.beginPath(); c.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [ax, ay] = pts[i - 1], [bx, by] = pts[i], [cx, cy] = pts[i + 1];
+    const rr = Math.min(r, Math.hypot(bx - ax, by - ay) / 2, Math.hypot(cx - bx, cy - by) / 2);
+    c.arcTo(bx, by, cx, cy, rr);
+  }
+  c.lineTo(pts[pts.length - 1][0], pts[pts.length - 1][1]);
+}
+function pill(c, x, y, text, color, pal, align) {
+  c.font = `600 11px "Segoe UI", system-ui, sans-serif`;
+  const w = c.measureText(text).width + 16, h = 19, px = align === 'right' ? x - w : x;
+  c.fillStyle = pal.bg; c.beginPath(); c.roundRect(px, y - h / 2, w, h, 9.5); c.fill();
+  c.globalAlpha = 0.22; c.fillStyle = color; c.fill(); c.globalAlpha = 1;
+  c.strokeStyle = color; c.lineWidth = 1; c.stroke();
+  c.fillStyle = pal.pillFg; c.textBaseline = 'middle'; c.fillText(text, px + 8, y + 0.5);
+  return { x: px, y: y - h / 2, w, h };
+}
+const hitsIcon = (x, y, w, h, pad = 6) => icons.some(ic => ic.x - pad < x + w && ic.x + ic.w + pad > x && ic.y - pad < y + h && ic.y + ic.h + pad > y);
+
+/* ======================================================================
+   静态缓存
+   ====================================================================== */
+const Lc = [0, 1, 2].map(() => document.createElement('canvas'));
+let cur = 0, old = -1, morphT0 = 0, cacheOK = false;
+function renderCache(dst, full) {
+  dst.width = cv.width; dst.height = cv.height;
+  const c = dst.getContext('2d', { alpha: false }), s = cv._scale, pal = PALS[P.palette], VB = deskBounds();
+  c.fillStyle = pal.bg; c.fillRect(0, 0, dst.width, dst.height);
+  c.setTransform(s, 0, 0, s, 0, 0);
+  // 点阵网格（虚拟桌面坐标，跨屏对齐）
+  c.fillStyle = pal.grid;
+  const gs = 28;
+  for (let y = Math.ceil(MON.y / gs) * gs - MON.y; y < H; y += gs) for (let x = Math.ceil(MON.x / gs) * gs - MON.x; x < W; x += gs) c.fillRect(x - 1, y - 1, 2, 2);
+  const glowOn = !!pal.glow;
+  c.lineCap = 'round'; c.lineJoin = 'round';
+  // main
+  c.strokeStyle = pal.main; c.lineWidth = 4;
+  if (glowOn) { c.shadowColor = pal.main; c.shadowBlur = 10 * s; }
+  c.beginPath();
+  for (let x = -10; x <= W + 10; x += 4) { const y = mainY(x); x === -10 ? c.moveTo(x, y) : c.lineTo(x, y); }
+  c.stroke();
+  // 分支
+  if (full) for (const b of G.branches) {
+    c.strokeStyle = b.color; c.lineWidth = 3;
+    if (glowOn) { c.shadowColor = b.color; c.shadowBlur = 8 * s; }
+    roundPoly(c, b.pts, b.R); c.stroke();
+  }
+  c.shadowBlur = 0;
+  // main 上的提交点（按虚拟桌面坐标每 STEP 一个，跨屏对齐）；避开图标和分叉 / 合并处
+  const busyX = full ? G.branches.flatMap(b => [b.fork[0], b.merge[0], b.pts[1][0], b.pts[b.pts.length - 2][0]]) : [];
+  c.font = `10.5px ${MONO}`; c.textBaseline = 'top'; c.textAlign = 'center';
+  const k0 = Math.floor((MON.x - 60) / STEP), k1 = Math.ceil((MON.x + W + 60) / STEP);
+  for (let k = k0; k <= k1; k++) {
+    const x = k * STEP + STEP / 2 - MON.x, y = mainY(x);
+    if (Math.abs(y - G.y0) > 1) continue;
+    if (full && (hitsIcon(x - 10, y - 10, 20, 20, 14) || busyX.some(bx => Math.abs(bx - x) < 30))) continue;
+    c.fillStyle = pal.node; c.strokeStyle = pal.main; c.lineWidth = 3;
+    c.beginPath(); c.arc(x, y, 6, 0, 6.2832); c.fill(); c.stroke();
+    if (P.labels && !(full && hitsIcon(x - 26, y + 12, 52, 14))) { c.fillStyle = pal.text; c.fillText(hexOf(k, 0), x, y + 13); }
+    if (P.labels && hash2(k, 1, 4) < 0.13 && !(full && hitsIcon(x - 34, y - 36, 68, 22))) {
+      c.textAlign = 'left';
+      const tag = `v0.${(k % 9 + 9) % 9}.${Math.floor(hash2(k, 2, 5) * 6)}`;
+      c.font = `600 11px "Segoe UI", system-ui, sans-serif`;
+      pill(c, x - (c.measureText(tag).width + 16) / 2, y - 24, tag, pal.main, pal);    // 版本标签，居中在提交点上方
+      c.font = `10.5px ${MONO}`; c.textBaseline = 'top'; c.textAlign = 'center';
+    }
+  }
+  if (full) {
+    // 图标（提交）：底下一个圆环，图标盖在圆环中间
+    for (const n of G.onMain) { c.fillStyle = pal.node; c.strokeStyle = pal.main; c.lineWidth = 3; c.beginPath(); c.arc(n.x, n.y, NODE_R, 0, 6.2832); c.fill(); c.stroke(); }
+    for (const b of G.branches) for (const n of b.seq) {
+      c.fillStyle = pal.node; c.strokeStyle = b.color; c.lineWidth = 3;
+      c.beginPath(); c.arc(n.x, n.y, NODE_R, 0, 6.2832); c.fill(); c.stroke();
+    }
+    // 分支名：贴在分叉处下面（放得下才放）
+    c.textAlign = 'left';
+    if (P.labels) for (const b of G.branches) {
+      const x = b.fork[0] - 4, y = b.fork[1] + 20;
+      c.font = `600 11px "Segoe UI", system-ui, sans-serif`;
+      const w = c.measureText(b.name).width + 16;
+      if (x > 2 && x + w < W - 2 && y + 12 < H - TASKBAR && !hitsIcon(x, y - 10, w, 20)) pill(c, x, y, b.name, b.color, pal);
+    }
+  }
+  // main 的两个标签：最左边 "main"，最右边 "HEAD -> main"（按虚拟桌面定位，只出现在边上的屏幕）
+  if (P.labels) {
+    const lx = VB.x + 18 - MON.x, rx = VB.x + VB.w - 18 - MON.x;
+    if (lx > -40 && lx < W && !(full && hitsIcon(lx, G.y0 - 40, 70, 24))) pill(c, lx, mainY(lx) - 26, 'main', pal.main, pal);
+    if (rx > 0 && rx < W + 40 && !(full && hitsIcon(rx - 120, G.y0 - 40, 120, 24))) pill(c, rx, mainY(rx) - 26, 'HEAD -> main', pal.main, pal, 'right');
+  }
+  c.setTransform(1, 0, 0, 1, 0, 0);
+}
+function morphE(now) { return old < 0 ? 1 : Math.min(1, (now - morphT0) / MORPH_MS); }
+function flatten(dst, now) {
+  dst.width = cv.width; dst.height = cv.height;
+  const c = dst.getContext('2d', { alpha: false });
+  c.drawImage(Lc[cur], 0, 0);
+  c.globalAlpha = 1 - ease(morphE(now)); c.drawImage(Lc[old], 0, 0); c.globalAlpha = 1;
+}
+let iconsSeen = !(WALL || PREVIEW);
+function commit(fromEmpty) {
+  const now = performance.now();
+  plan();
+  live = null; liveWait = 2;
+  let from = -1;
+  if (fromEmpty) { from = cur === 0 ? 1 : 0; renderCache(Lc[from], false); }
+  else if (cacheOK && old >= 0 && morphE(now) < 1) { from = [0, 1, 2].find(i => i !== cur && i !== old); flatten(Lc[from], now); }
+  else if (cacheOK) from = cur;
+  cur = [0, 1, 2].find(i => i !== from);
+  renderCache(Lc[cur], true);
+  old = STILL ? -1 : from; morphT0 = now; cacheOK = true;
+  if (paused) { old = -1; draw(now); }
+}
+
+/* ======================================================================
+   新分支：在 main 上方 / 下方的空地分叉，提交一个个冒出来，再并回 main（每块屏幕各自长）
+   ====================================================================== */
+let live = null, liveWait = 2, liveRng = mulberry32(1);
+const LIVE_WAIT = [[1e9, 1e9], [9, 22], [3, 8]];
+function planLive() {
+  const y0 = G.y0;
+  for (let tr = 0; tr < 40; tr++) {
+    const len = 300 + 170 * liveRng(), x0 = 40 + liveRng() * (W - len - 80), dir = liveRng() < 0.5 ? -1 : 1, h = 72 + 40 * liveRng();
+    const top = dir < 0 ? y0 - h - 40 : y0 - 20, bottom = dir < 0 ? y0 + 20 : y0 + h + 40;
+    if (x0 < 20 || top < 10 || bottom > H - TASKBAR - 6) continue;
+    if (hitsIcon(x0 - 20, top, len + 40, bottom - top, 10)) continue;
+    let flat = true;
+    for (let x = x0 - 20; x <= x0 + len + 20; x += 20) if (Math.abs(mainY(x) - y0) > 1) { flat = false; break; }
+    if (!flat) continue;
+    // 路径：采样成折线，记下累计长度，画的时候按长度截取
+    const yl = y0 + dir * h, pts = [];
+    const bez = (ax, ay, bx, by, n) => { for (let i = 1; i <= n; i++) { const t = i / n, e = t * t * (3 - 2 * t); pts.push([ax + (bx - ax) * t, ay + (by - ay) * e]); } };
+    pts.push([x0, y0]);
+    bez(x0, y0, x0 + 60, yl, 16);
+    pts.push([x0 + len - 60, yl]);
+    bez(x0 + len - 60, yl, x0 + len, y0, 16);
+    const cum = [0];
+    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+    const k = 3 + Math.floor(liveRng() * 3), xs = [];
+    for (let i = 0; i < k; i++) xs.push(x0 + 90 + i * (len - 180) / Math.max(1, k - 1));
+    const lenAt = x => { let best = 0; for (let i = 0; i < pts.length; i++) if (Math.abs(pts[i][1] - yl) < 0.5 && pts[i][0] <= x) best = cum[i] + (x - pts[i][0]); return best; };
+    const pal = PALS[P.palette];
+    return { pts, cum, total: cum[cum.length - 1], xs, ls: xs.map(lenAt), yl, x0, len, y0, t0: simT, color: pal.lanes[Math.floor(liveRng() * pal.lanes.length)],
+      name: NAMES[Math.floor(liveRng() * NAMES.length)], hash: liveRng() };
+  }
+  return null;
+}
+function stepLive(dt) {
+  if (live) { const tl = liveTimeline(live); if (simT - live.t0 > tl.end) { live = null; const [a, b] = LIVE_WAIT[P.activity]; liveWait = a + (b - a) * liveRng(); } return; }
+  if (!P.activity) return;
+  liveWait -= dt;
+  if (liveWait <= 0) { live = planLive(); if (!live) liveWait = 6; }
+}
+function liveTimeline(L) {
+  const fork = 0.9, gap = 1.3, k = L.xs.length, mergeAt = fork + k * gap + 0.4;
+  return { fork, gap, mergeAt, merged: mergeAt + 0.9, end: mergeAt + 0.9 + 4.5 };
+}
+function drawLive() {
+  if (!live) return;
+  const L = live, tl = liveTimeline(L), e = simT - L.t0, pal = PALS[P.palette];
+  const k = L.xs.length;
+  let len;
+  if (e < tl.fork) len = ease(e / tl.fork) * L.ls[0];
+  else if (e < tl.mergeAt) { const i = Math.min(k - 1, Math.floor((e - tl.fork) / tl.gap)), f = clamp((e - tl.fork - i * tl.gap) / 0.5, 0, 1); len = i === 0 ? L.ls[0] : L.ls[i - 1] + (L.ls[i] - L.ls[i - 1]) * ease(f); }
+  else len = L.ls[k - 1] + (L.total - L.ls[k - 1]) * ease(clamp((e - tl.mergeAt) / 0.9, 0, 1));
+  const fade = clamp((tl.end - e) / 1.2, 0, 1);
+  ctx.globalAlpha = fade;
+  ctx.strokeStyle = L.color; ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.beginPath(); ctx.moveTo(L.pts[0][0], L.pts[0][1]);
+  for (let i = 1; i < L.pts.length; i++) {
+    if (L.cum[i] <= len) { ctx.lineTo(L.pts[i][0], L.pts[i][1]); continue; }
+    const t = (len - L.cum[i - 1]) / (L.cum[i] - L.cum[i - 1]);
+    ctx.lineTo(L.pts[i - 1][0] + (L.pts[i][0] - L.pts[i - 1][0]) * t, L.pts[i - 1][1] + (L.pts[i][1] - L.pts[i - 1][1]) * t);
+    break;
+  }
+  ctx.stroke();
+  // 提交一个个冒出来
+  for (let i = 0; i < k; i++) {
+    const ti = tl.fork + i * tl.gap + 0.4;
+    if (e < ti) break;
+    const sc = backOut(clamp((e - ti) / 0.35, 0, 1));
+    ctx.fillStyle = pal.node; ctx.strokeStyle = L.color; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(L.xs[i], L.yl, 7 * sc, 0, 6.2832); ctx.fill(); ctx.stroke();
+    if (P.labels && sc > 0.9) { ctx.font = `10.5px ${MONO}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = pal.text;
+      ctx.fillText(hexOf((L.hash * 1e6) | 0, i), L.xs[i], L.yl + (L.yl < L.y0 ? -17 : 17)); }
+  }
+  // 分支名
+  if (P.labels && e > 0.5) { ctx.textAlign = 'left'; pill(ctx, L.x0 + 66, L.yl + (L.yl < L.y0 ? -26 : 26), L.name, L.color, pal); }
+  // 合并提交（main 上）
+  if (e > tl.merged) {
+    const sc = backOut(clamp((e - tl.merged) / 0.35, 0, 1));
+    ctx.fillStyle = pal.node; ctx.strokeStyle = pal.main; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(L.x0 + L.len, L.y0, 8 * sc, 0, 6.2832); ctx.fill(); ctx.stroke();
+  }
+  ctx.globalAlpha = 1; ctx.textAlign = 'left';
+}
+
+/* ======================================================================
+   main 上流动的亮点：按系统时钟和虚拟桌面坐标排，几块屏幕看到的是同一串，从一块流到另一块
+   ====================================================================== */
+const glowSpr = (() => { const c = document.createElement('canvas'); c.width = c.height = 64; return c; })();
+let glowCol = '';
+function drawPulses(t) {
+  if (!P.pulses) return;
+  const pal = PALS[P.palette];
+  if (glowCol !== pal.main) {
+    glowCol = pal.main;
+    const c = glowSpr.getContext('2d'); c.clearRect(0, 0, 64, 64);
+    const g = c.createRadialGradient(32, 32, 0, 32, 32, 32);
+    g.addColorStop(0, '#ffffff'); g.addColorStop(0.18, pal.main); g.addColorStop(1, 'rgba(0,0,0,0)');
+    c.fillStyle = g; c.fillRect(0, 0, 64, 64);
+  }
+  const VB = deskBounds(), span = VB.w + 400, sp = 170;
+  for (let i = 0; i < P.pulses; i++) {
+    const xw = VB.x - 200 + (((t * sp + i * span / P.pulses) % span) + span) % span, x = xw - MON.x;
+    if (x < -60 || x > W + 60) continue;
+    for (let j = 5; j >= 0; j--) {
+      const xx = x - j * 9;
+      ctx.globalAlpha = j ? 0.18 * (1 - j / 6) : 0.95;
+      const r = j ? 9 - j : 13;
+      ctx.drawImage(glowSpr, xx - r, mainY(xx) - r, r * 2, r * 2);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* ======================================================================
+   尺寸 / 主循环
+   ====================================================================== */
+function resize() {
+  const box = cv.getBoundingClientRect();
+  W = box.width || innerWidth; H = box.height || innerHeight;
+  const scale = PREVIEW ? 0.5 : (devicePixelRatio || 1);
+  cv.width = Math.round(W * scale); cv.height = Math.round(H * scale); cv._scale = scale;
+  cacheOK = false;
+}
+let simT = 0, lastT = 0, frameN = 0, paused = false;
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (paused) { lastT = 0; return; }
+  if (lastT && now - lastT < 31) return;                 // 30fps
+  const dt = lastT ? Math.min((now - lastT) / 1000, 0.1) : 0.033;
+  lastT = now;
+  simT += dt;
+  if (iconsSeen && G) stepLive(dt);
+  draw(now);
+  frameN++;
+}
+function draw(now) {
+  const s = cv._scale;
+  if (!iconsSeen) { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = PALS[P.palette].bg; ctx.fillRect(0, 0, cv.width, cv.height); return; }
+  if (!G) plan();
+  if (!cacheOK || Lc[cur].width !== cv.width || Lc[cur].height !== cv.height) { renderCache(Lc[cur], true); old = -1; cacheOK = true; }
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1;
+  ctx.drawImage(Lc[cur], 0, 0);
+  if (old >= 0) {
+    const e = morphE(now);
+    if (e < 1) { ctx.globalAlpha = 1 - ease(e); ctx.drawImage(Lc[old], 0, 0); ctx.globalAlpha = 1; }
+    else old = -1;
+  }
+  ctx.setTransform(s, 0, 0, s, 0, 0);
+  drawLive();
+  drawPulses(wallClock());
+}
+
+/* ======================================================================
+   浏览器里单独打开：示例图标，可以拖
+   ====================================================================== */
+const desktop = document.getElementById('desktop');
+const SAMPLE = [['回收站', '#7b8fb5'], ['此电脑', '#2f7de1'], ['项目资料', '#e3a32f'], ['设计稿', '#db2777'], ['周报.xlsx', '#107c41'],
+  ['合同.pdf', '#d33a2c'], ['Chrome', '#f59e0b'], ['VS Code', '#2563eb'], ['Figma', '#8b5cf6'], ['Steam', '#334155'],
+  ['照片', '#0ea5a4'], ['下载', '#e3a32f'], ['笔记.txt', '#64748b']];
+let grid = { cols: 1, rows: 1 }, drag = null;
+const cellPos = (c, r) => ({ x: GRID_X0 + c * CELL_W, y: GRID_Y0 + r * CELL_H });
+function addIcon([name, color], pos) {
+  const el = document.createElement('div');
+  el.className = 'icon';
+  el.innerHTML = `<div class="glyph" style="background:${color}">${[...name][0]}</div><div class="label">${name}</div>`;
+  el.style.left = pos.x + 'px'; el.style.top = pos.y + 'px';
+  desktop.appendChild(el);
+  const ic = { x: pos.x, y: pos.y, w: el.offsetWidth, h: el.offsetHeight, el };
+  icons.push(ic);
+  el.addEventListener('pointerdown', e => { if (e.button) return; el.setPointerCapture(e.pointerId); el.classList.remove('settle'); drag = { ic, sx: e.clientX, sy: e.clientY, ox: ic.x, oy: ic.y }; });
+  el.addEventListener('pointermove', e => { if (!drag || drag.ic !== ic) return; el.classList.add('drag'); el.style.left = drag.ox + e.clientX - drag.sx + 'px'; el.style.top = drag.oy + e.clientY - drag.sy + 'px'; });
+  el.addEventListener('pointerup', e => {
+    if (!drag || drag.ic !== ic) return;
+    const d = drag; drag = null; el.classList.remove('drag');
+    const cx = d.ox + e.clientX - d.sx + ic.w / 2, cy = d.oy + e.clientY - d.sy + ic.h / 2;
+    let best = null, bd = Infinity;
+    for (let c = 0; c < grid.cols; c++) for (let r = 0; r < grid.rows; r++) {
+      const p = cellPos(c, r);
+      if (icons.some(o => o !== ic && Math.abs(o.x - p.x) < 2 && Math.abs(o.y - p.y) < 2)) continue;
+      const dd = Math.hypot(p.x + CELL_W / 2 - cx, p.y + CELL_H / 2 - cy);
+      if (dd < bd) { bd = dd; best = p; }
+    }
+    if (!best) best = { x: d.ox, y: d.oy };
+    el.classList.add('settle'); ic.x = best.x; ic.y = best.y; el.style.left = best.x + 'px'; el.style.top = best.y + 'px';
+    if (best.x !== d.ox || best.y !== d.oy) commit(false);
+  });
+  return ic;
+}
+function sampleLayout() {
+  grid.cols = Math.max(1, Math.floor((W - GRID_X0) / CELL_W)); grid.rows = Math.max(1, Math.floor((H - TASKBAR - GRID_Y0) / CELL_H));
+  const cells = [];
+  for (let r = 0; r < Math.min(5, grid.rows); r++) cells.push([0, r]);
+  for (let r = 0; r < Math.min(3, grid.rows); r++) cells.push([1, r]);
+  const mc = Math.floor(grid.cols * 0.5), mr = Math.floor(grid.rows * 0.2);
+  for (const [dc, dr] of [[0, 0], [0, 1], [1, 1]]) cells.push([mc + dc, mr + dr]);
+  cells.push([Math.floor(grid.cols * 0.78), grid.rows - 2]);           // 一个压在 main 上的图标
+  let i = 0;
+  for (const [c, r] of cells) if (c < grid.cols && r >= 0 && r < grid.rows) addIcon(SAMPLE[i++ % SAMPLE.length], cellPos(c, r));
+}
+const hint = document.getElementById('hint');
+addEventListener('keydown', e => {
+  if (WALL || PREVIEW) return;
+  const k = e.key.toLowerCase();
+  if (k === 'r') reseed((Math.random() * 1e6) | 0);
+  else if (k === 'h') hint.classList.toggle('hidden');
+  else if (k === 'p') { P.palette = (P.palette + 1) % 2; commit(false); }
+  else if (k === 'b') { live = planLive(); }
+});
+let resizeT = 0;
+addEventListener('resize', () => {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(() => { resize(); if (iconsSeen) commit(false); }, 100);
+});
+
+/* ======================================================================
+   托管模式：icons / settings / reset / pause / screens
+   ====================================================================== */
+function reseed(v) { seed = v; liveRng = mulberry32((seed ^ 0xb7a) + monSalt()); if (iconsSeen) commit(true); }
+function applySettings(v) {
+  if (typeof v.seed === 'number' && v.seed !== seed) reseed(v.seed);
+  let dirty = false;
+  for (const k in v) {
+    if (!(k in LIMITS) || typeof v[k] !== 'number' || !isFinite(v[k])) continue;
+    const x = Math.round(clamp(v[k], LIMITS[k][0], LIMITS[k][1]));
+    if (P[k] === x) continue;
+    P[k] = x;
+    if (k === 'palette' || k === 'labels') dirty = true;
+    if (k === 'activity') liveWait = Math.min(liveWait, 3);
+  }
+  if (dirty && iconsSeen) commit(false);
+}
+function setScreens(m) {
+  if (!Array.isArray(m.me) || !Array.isArray(m.all)) return;
+  const k = devicePixelRatio || 1;
+  MON = { x: m.me[0] / k, y: m.me[1] / k };
+  SCREENS = m.all.filter(r => Array.isArray(r) && r.length === 4).map(r => r.map(v => v / k));
+  liveRng = mulberry32((seed ^ 0xb7a) + monSalt());
+  if (iconsSeen) commit(false);
+}
+function drawGhosts() {
+  document.getElementById('ghosts').innerHTML = icons.map(ic => `<div class="ghost" style="left:${ic.x}px;top:${ic.y}px;width:${ic.w}px;height:${ic.h}px"><i></i><b></b></div>`).join('');
+}
+function startHostedMode() {
+  document.body.classList.add('wall');
+  if (PREVIEW) {
+    document.body.classList.add('preview');
+    const g = document.createElement('div'); g.id = 'ghosts'; document.body.appendChild(g);
+  }
+  icons = [];
+  let first = true;
+  const handle = m => {
+    if (m.t === 'pause') { paused = PREVIEW ? false : !!m.v; return; }
+    if (m.t === 'screens') { setScreens(m); return; }
+    if (m.t === 'settings') { applySettings(m.v || {}); return; }
+    if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
+    if (m.t !== 'icons') return;
+    const k = window.devicePixelRatio || 1;
+    icons = m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : [];
+    if (PREVIEW) drawGhosts();
+    iconsSeen = true;
+    commit(first);
+    first = false;
+  };
+  if (PREVIEW) {
+    addEventListener('message', ev => { if (ev.source === parent) handle(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data); });
+    parent.postMessage(JSON.stringify({ t: 'ready' }), '*');
+    return;
+  }
+  const host = window.chrome && window.chrome.webview;
+  if (!host) return;
+  host.addEventListener('message', ev => handle(JSON.parse(ev.data)));
+  host.postMessage('ready');
+}
+
+/* ---------- 启动 ---------- */
+window.__dbg = {
+  P, commit, reseed,
+  bench() {
+    const ts = [];
+    for (let i = 0; i < 10; i++) { const a = performance.now(); draw(performance.now()); ts.push(performance.now() - a); }
+    ts.sort((a, b) => a - b);
+    const a = performance.now(); commit(false); const c = performance.now() - a;
+    return { frame: +ts[5].toFixed(2), commit: +c.toFixed(1), canvas: cv.width + 'x' + cv.height };
+  },
+};
+resize();
+liveRng = mulberry32((seed ^ 0xb7a) + monSalt());
+if (WALL || PREVIEW) startHostedMode();
+else { sampleLayout(); commit(true); }
+if (QS.has('live')) { liveWait = 0; }
+requestAnimationFrame(frame);
+</script>
+<script src="share.js"></script>   <!-- 分享图片 / 分享动画（示例图标、名字是色块） -->
+</body>
+</html>
