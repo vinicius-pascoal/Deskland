@@ -589,6 +589,69 @@
           "unit": ""
         }
       }
+    },
+    "desk": {
+      "name": "Desk",
+      "desc": "A wooden desk seen from above: icons sit on sticky notes and paper, coffee steams, shadows follow the time of day and a cat walks from one screen to the next",
+      "groups": [
+        "Desk",
+        "Under icons",
+        "Details"
+      ],
+      "params": {
+        "wood": {
+          "label": "Wood",
+          "hint": "Which wood the desk is made of",
+          "options": [
+            "Light oak",
+            "Walnut",
+            "Maple"
+          ]
+        },
+        "light": {
+          "label": "Light",
+          "hint": "When following the clock, shadows and window light slowly change with your computer's time; at night only the desk lamp remains",
+          "options": [
+            "Follow clock",
+            "Morning",
+            "Noon",
+            "Evening",
+            "Night"
+          ]
+        },
+        "notes": {
+          "label": "Paper",
+          "hint": "Whether your icons sit on sticky notes or sheets of paper",
+          "options": [
+            "None",
+            "Sticky notes",
+            "Paper",
+            "Mixed"
+          ]
+        },
+        "items": {
+          "label": "Stationery",
+          "hint": "Notebook, pencils, glasses, eraser and paper clips; 0 to hide. Fewer appear if there is not enough room.",
+          "unit": ""
+        },
+        "coffee": {
+          "label": "Coffee",
+          "hint": "A steaming cup of coffee",
+          "options": [
+            "Hide",
+            "Show"
+          ]
+        },
+        "cat": {
+          "label": "Cat",
+          "hint": "A cat strolls across the desk; with several monitors it walks from one screen to the next",
+          "options": [
+            "Never",
+            "Now and then",
+            "Often"
+          ]
+        }
+      }
     }
   }
 }

@@ -1193,6 +1193,25 @@ class WallpaperForm : Form
     }
     string PageUrl { get { return "https://app.local/" + page + "?wallpaper=1"; } }
 
+    // 显示器布局（物理像素，虚拟桌面坐标）：me 是这个窗口负责的显示器，all 是全部显示器。
+    // 跨屏的主题（书桌）据此把几块屏幕拼成同一张桌子；其他主题忽略这条消息
+    string ScreensJson()
+    {
+        var sb = new StringBuilder();
+        sb.Append("{\"t\":\"screens\",\"me\":").Append(RectJson(screen)).Append(",\"all\":[");
+        Screen[] all = Screen.AllScreens;
+        for (int i = 0; i < all.Length; i++)
+        {
+            if (i > 0) sb.Append(',');
+            sb.Append(RectJson(all[i].Bounds));
+        }
+        return sb.Append("]}").ToString();
+    }
+    static string RectJson(Rectangle r)
+    {
+        return "[" + r.X + "," + r.Y + "," + r.Width + "," + r.Height + "]";
+    }
+
     // 切换主题：换页面；新页面就绪后会重新收到设置和图标
     public void LoadPage(string newPage)
     {
@@ -1234,6 +1253,7 @@ class WallpaperForm : Form
                 if (msg != null && msg.StartsWith("snapshot|")) { OnSnapshot(msg); return; }
                 if (msg != null && msg.StartsWith("recprogress|")) { if (RecordProgress != null) RecordProgress(msg.Substring(12)); return; }
                 if (msg != null && msg.StartsWith("record|")) { OnRecord(msg); return; }
+                core.PostWebMessageAsString(ScreensJson());
                 if (SettingsJson != null) core.PostWebMessageAsString(SettingsJson());
                 lastIcons = ""; lastPause = -1; PollIcons(); PollForeground();
             };

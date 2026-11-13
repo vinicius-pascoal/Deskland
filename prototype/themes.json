@@ -273,6 +273,99 @@
       ]
     },
     {
+      "id": "desk",
+      "name": "书桌",
+      "desc": "俯看一张木头书桌，图标垫在便利贴和纸上，咖啡冒着热气；影子跟着时间变化，小猫会从一块屏幕走到另一块",
+      "page": "desk.html",
+      "status": "ready",
+      "product": "free",
+      "thumb": "radial-gradient(circle at 76% 36%, #4a2c1a 0 7%, #2f6f73 7.5% 10.5%, #f3efe8 11% 14%, transparent 14.5%), linear-gradient(#fde68a, #fde68a) 14% 22% / 15% 27% no-repeat, linear-gradient(#bae6fd, #bae6fd) 33% 62% / 15% 27% no-repeat, linear-gradient(#fbfaf5, #fbfaf5) 50% 26% / 14% 36% no-repeat, linear-gradient(100deg, transparent 52%, #f2b632 52% 54%, transparent 54%) 70% 80% / 40% 20% no-repeat, repeating-linear-gradient(180deg, #d6a970 0 18%, #c4945c 18% 19%), #d0a26a",
+      "groups": [
+        {
+          "name": "桌面",
+          "params": [
+            {
+              "key": "wood",
+              "label": "木头",
+              "hint": "书桌用哪种木头",
+              "options": [
+                "浅橡木",
+                "胡桃木",
+                "白枫木"
+              ],
+              "default": 0
+            },
+            {
+              "key": "light",
+              "label": "光线",
+              "hint": "跟随时钟时，影子和窗光会随电脑上的时间慢慢变化，夜里只剩台灯",
+              "options": [
+                "跟随时钟",
+                "早晨",
+                "中午",
+                "傍晚",
+                "夜晚"
+              ],
+              "default": 0
+            }
+          ]
+        },
+        {
+          "name": "图标下面",
+          "params": [
+            {
+              "key": "notes",
+              "label": "垫纸",
+              "hint": "图标下面垫的是便利贴还是纸",
+              "options": [
+                "不垫",
+                "便利贴",
+                "纸张",
+                "混合"
+              ],
+              "default": 3
+            }
+          ]
+        },
+        {
+          "name": "元素",
+          "params": [
+            {
+              "key": "items",
+              "label": "文具",
+              "hint": "笔记本、铅笔、眼镜、橡皮和回形针，设为 0 可隐藏；空地不够时会减少显示",
+              "min": 0,
+              "max": 6,
+              "step": 1,
+              "default": 4,
+              "unit": "件"
+            },
+            {
+              "key": "coffee",
+              "label": "咖啡",
+              "hint": "冒着热气的一杯咖啡",
+              "options": [
+                "隐藏",
+                "显示"
+              ],
+              "default": 1
+            },
+            {
+              "key": "cat",
+              "label": "小猫",
+              "hint": "小猫从桌上走过；有多个显示器时，它会从一块屏幕走到另一块",
+              "options": [
+                "不来",
+                "偶尔",
+                "常来"
+              ],
+              "default": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "beach-turquoise",
       "name": "马尔代夫",
       "desc": "青绿色海水与浅米黄沙滩，暗色珊瑚礁间的小鱼成群游动",
