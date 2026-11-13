@@ -214,9 +214,17 @@ static class Json
 static class Settings
 {
     static readonly string FilePath = Path.Combine(Log.DataDir, "settings.json");
-    public static string Theme = "beach";
+    public static string Theme = "beach";              // 默认主题（"所有显示器"），没有单独设置的显示器都用它
     public static string Lang = "auto";                // 界面语言："auto"（跟随系统）或 I18n.Supported 里的一种
     public static Dictionary<string, Dictionary<string, object>> Params = new Dictionary<string, Dictionary<string, object>>();
+    // 单独设置了主题的显示器：显示器设备名（如 \\.\DISPLAY2）→ 主题
+    public static Dictionary<string, string> Monitors = new Dictionary<string, string>();
+
+    public static string ThemeFor(string monitor)
+    {
+        string t;
+        return monitor != null && Monitors.TryGetValue(monitor, out t) ? t : Theme;
+    }
 
     public static void Load()
     {
@@ -234,7 +242,10 @@ static class Settings
                     var d = kv.Value as Dictionary<string, object>;
                     if (d != null) Params[kv.Key] = d;
                 }
-            Log.Write("已读取设置：主题 " + Theme);
+            if (root.TryGetValue("monitors", out v) && v is Dictionary<string, object>)
+                foreach (var kv in (Dictionary<string, object>)v)
+                    if (kv.Value is string) Monitors[kv.Key] = (string)kv.Value;
+            Log.Write("已读取设置：主题 " + Theme + (Monitors.Count > 0 ? "，单独设置的显示器 " + Monitors.Count + " 个" : ""));
         }
         catch (Exception ex) { Log.Write("读取设置失败（将使用默认值）：" + ex.Message); }
     }
@@ -244,7 +255,7 @@ static class Settings
         try
         {
             Directory.CreateDirectory(Log.DataDir);
-            File.WriteAllText(FilePath, Json.Stringify(Json.Obj("version", 1, "theme", Theme, "lang", Lang, "params", Params)), new UTF8Encoding(false));
+            File.WriteAllText(FilePath, Json.Stringify(Json.Obj("version", 1, "theme", Theme, "monitors", Monitors, "lang", Lang, "params", Params)), new UTF8Encoding(false));
         }
         catch (Exception ex) { Log.Write("保存设置失败：" + ex.Message); }
     }
@@ -430,10 +441,46 @@ class HostContext : ApplicationContext
         settingsWin.Activate();
     }
 
-    string SettingsMessage()
+    string SettingsMessage(string theme)
     {
-        return Json.Stringify(Json.Obj("t", "settings", "v", Settings.For(Settings.Theme)));
+        return Json.Stringify(Json.Obj("t", "settings", "v", Settings.For(theme)));
     }
+
+    // ---- 每个显示器可以用不同的主题 ----
+    string selectedMonitor = "all";                     // 设置页选中的显示器（"all" = 所有显示器）：预览图标、分享都用它
+
+    WallpaperForm Selected
+    {
+        get
+        {
+            if (selectedMonitor != "all") foreach (var f in forms) if (f.MonitorKey == selectedMonitor) return f;
+            return Primary;
+        }
+    }
+
+    // 给设置页的显示器清单：设备名、位置大小（物理像素）、是不是主显示器、现在用的主题
+    List<object> MonitorList()
+    {
+        var list = new List<object>();
+        foreach (Screen s in Screen.AllScreens)
+        {
+            string theme = Settings.ThemeFor(s.DeviceName);
+            foreach (var f in forms) if (f.MonitorKey == s.DeviceName) theme = f.ThemeId;
+            list.Add(Json.Obj("key", s.DeviceName, "primary", s.Primary, "x", s.Bounds.X, "y", s.Bounds.Y,
+                "w", s.Bounds.Width, "h", s.Bounds.Height, "theme", theme));
+        }
+        return list;
+    }
+
+    // 跨屏主题（书桌、编辑器……）只把显示同一个主题的屏幕拼在一起
+    List<Rectangle> ScreensFor(string theme)
+    {
+        var list = new List<Rectangle>();
+        foreach (var f in forms) if (f.ThemeId == theme) list.Add(f.ScreenBounds);
+        return list;
+    }
+
+    void RepostScreens() { foreach (var f in forms) f.PostScreens(); }
 
     string UpdateStateMessage()
     {
@@ -479,22 +526,27 @@ class HostContext : ApplicationContext
             case "hello":
                 Rectangle scr = Screen.PrimaryScreen.Bounds;
                 settingsWin.Post(Json.Stringify(Json.Obj("t", "init", "theme", Settings.Theme, "params", Settings.Params,
-                    "screen", Json.Obj("w", scr.Width, "h", scr.Height), "autostart", IsAutoStart(),
-                    "autostartWarn", autoStartSw != null, "autostartSw", autoStartSw ?? "",
+                    "screen", Json.Obj("w", scr.Width, "h", scr.Height), "monitors", MonitorList(), "selected", selectedMonitor,
+                    "autostart", IsAutoStart(), "autostartWarn", autoStartSw != null, "autostartSw", autoStartSw ?? "",
                     "lang", Settings.Lang, "langEff", I18n.Code, "langSys", I18n.Sys)));
                 if (updateVersion != null) PostUpdateState();
-                if (Primary != null && Primary.LastIcons != "") settingsWin.Post(Primary.LastIcons);
+                if (Selected != null && Selected.LastIcons != "") settingsWin.Post(Selected.LastIcons);
                 break;
+            case "monitor":                                 // 设置页换了显示器：预览改用那块屏幕的图标
+            {
+                string key = m.ContainsKey("key") ? m["key"] as string : null;
+                if (key == null) return;
+                selectedMonitor = key;
+                if (Selected != null && Selected.LastIcons != "") settingsWin.Post(Selected.LastIcons);
+                break;
+            }
             case "set":
             {
                 string theme = m["theme"] as string, key = m["key"] as string;
                 if (theme == null || key == null) return;
                 Settings.For(theme)[key] = m["value"];
-                if (theme == Settings.Theme)
-                {
-                    string json = Json.Stringify(Json.Obj("t", "settings", "v", Json.Obj(key, m["value"])));
-                    foreach (var f in forms) f.Post(json);
-                }
+                string json = Json.Stringify(Json.Obj("t", "settings", "v", Json.Obj(key, m["value"])));
+                foreach (var f in forms) if (f.ThemeId == theme) f.Post(json);
                 SaveSoon();
                 break;
             }
@@ -503,26 +555,30 @@ class HostContext : ApplicationContext
                 string theme = m["theme"] as string;
                 if (theme == null) return;
                 Settings.Params.Remove(theme);
-                if (theme == Settings.Theme) foreach (var f in forms) f.Post("{\"t\":\"reset\"}");
+                foreach (var f in forms) if (f.ThemeId == theme) f.Post("{\"t\":\"reset\"}");
                 SaveSoon();
                 Log.Write("恢复默认设置：" + theme);
                 break;
             }
             case "theme":
             {
-                string id = m["id"] as string;
-                if (id == null || !ThemeAllowed(id))
+                // monitor："all"（所有显示器：设为默认主题，清掉单独的设置）或某块显示器的设备名
+                string id = m["id"] as string, monitor = (m.ContainsKey("monitor") ? m["monitor"] as string : null) ?? "all";
+                string page = id != null && ThemeAllowed(id) ? Themes.PageFor(pageDir, id) : null;
+                if (page == null)
                 {
-                    settingsWin.Post(Json.Stringify(Json.Obj("t", "themeChanged", "id", Settings.Theme)));
+                    settingsWin.Post(Json.Stringify(Json.Obj("t", "themeChanged", "id", monitor == "all" ? Settings.Theme : Settings.ThemeFor(monitor), "monitor", monitor)));
                     Log.Write("拒绝未授权或未知主题切换：" + (id ?? "null"));
                     return;
                 }
-                string page = Themes.PageFor(pageDir, id);
-                if (page == null || id == Settings.Theme) return;
-                Settings.Theme = id;
+                if (monitor == "all") { Settings.Theme = id; Settings.Monitors.Clear(); }
+                else if (id == Settings.Theme) Settings.Monitors.Remove(monitor);   // 和默认一样：不用单独记
+                else Settings.Monitors[monitor] = id;
                 SaveSoon();
-                foreach (var f in forms) f.LoadPage(page);
-                Log.Write("切换主题：" + id);
+                foreach (var f in forms)
+                    if ((monitor == "all" || f.MonitorKey == monitor) && f.ThemeId != id) f.LoadPage(page, id);
+                RepostScreens();                            // 同主题的屏幕组变了：跨屏主题重新拼
+                Log.Write("切换主题：" + id + (monitor == "all" ? "（所有显示器）" : "（" + monitor + "）"));
                 break;
             }
             case "autostartWarnSeen":
@@ -540,12 +596,12 @@ class HostContext : ApplicationContext
                 break;
             }
             case "share":
-                if (Primary == null) { PostShareResult(false, null, I18n.T("errNotReady")); break; }
-                Primary.RequestSnapshot(OnShareImage);
+                if (Selected == null) { PostShareResult(false, null, I18n.T("errNotReady")); break; }
+                Selected.RequestSnapshot(OnShareImage);
                 break;
             case "shareVideo":
-                if (Primary == null) { PostShareResult(false, null, I18n.T("errNotReady")); break; }
-                Primary.RequestRecording(OnShareVideo);
+                if (Selected == null) { PostShareResult(false, null, I18n.T("errNotReady")); break; }
+                Selected.RequestRecording(OnShareVideo);
                 break;
             case "openShare":
                 if (lastShare != null && File.Exists(lastShare)) Process.Start(lastShare);
@@ -784,19 +840,20 @@ class HostContext : ApplicationContext
             nextStart = DateTime.Now.AddSeconds(5);
             return;
         }
-        // 每个显示器一个窗口（进程是 Per-Monitor DPI 感知的，Bounds 都是物理像素）
+        // 每个显示器一个窗口（进程是 Per-Monitor DPI 感知的，Bounds 都是物理像素）；每块屏幕用自己的主题（没单独设置就用默认）
         Screen[] screens = Screen.AllScreens;
         screenLayout = LayoutOf(screens);
         layoutDue = DateTime.MaxValue;
         for (int i = 0; i < screens.Length; i++)
         {
-            var f = new WallpaperForm(pageDir, page, manualPause, screens[i].Bounds, screens[i].Primary, i);
-            f.SettingsJson = SettingsMessage;
-            if (screens[i].Primary)
-            {
-                f.IconsChanged += delegate(string json) { if (settingsWin != null) settingsWin.Post(json); };
-                f.RecordProgress += delegate(string p) { if (settingsWin != null) settingsWin.Post("{\"t\":\"recProgress\",\"p\":" + p + "}"); };
-            }
+            string key = screens[i].DeviceName, theme = Settings.ThemeFor(key);
+            if (!ThemeAllowed(theme)) theme = Settings.Theme;
+            var f = new WallpaperForm(pageDir, Themes.PageFor(pageDir, theme) ?? page, manualPause, screens[i].Bounds, screens[i].Primary, i, key, theme);
+            f.SettingsJson = delegate { return SettingsMessage(f.ThemeId); };
+            f.ScreensFor = ScreensFor;
+            // 设置页的预览和分享进度只跟选中的那块屏幕
+            f.IconsChanged += delegate(string json) { if (settingsWin != null && f == Selected) settingsWin.Post(json); };
+            f.RecordProgress += delegate(string p) { if (settingsWin != null && f == Selected) settingsWin.Post("{\"t\":\"recProgress\",\"p\":" + p + "}"); };
             f.HandleDestroyed += OnFormGone;
             forms.Add(f);
         }
@@ -1073,12 +1130,18 @@ class WallpaperForm : Form
     public event Action<string> IconsChanged;           // 图标变化时转给设置窗口的预览
     public string LastIcons { get { return lastIcons; } }
     public bool IsPrimary { get { return primary; } }
+    public readonly string MonitorKey;                  // 显示器设备名（如 \\.\DISPLAY1），按它记每块屏幕的主题
+    public string ThemeId { get; private set; }         // 这块屏幕现在的主题
+    public Rectangle ScreenBounds { get { return screen; } }
+    public Func<string, List<Rectangle>> ScreensFor;    // 显示同一个主题的所有屏幕（跨屏主题按它拼成一整块）
     protected override bool ShowWithoutActivation { get { return true; } }
 
-    public WallpaperForm(string pageDir, string page, bool manualPause, Rectangle screen, bool primary, int index)
+    public WallpaperForm(string pageDir, string page, bool manualPause, Rectangle screen, bool primary, int index, string monitorKey, string themeId)
     {
         this.pageDir = pageDir;
         this.page = page;
+        MonitorKey = monitorKey;
+        ThemeId = themeId;
         this.manualPause = manualPause;
         this.screen = screen;
         this.primary = primary;
@@ -1194,29 +1257,33 @@ class WallpaperForm : Form
     }
     string PageUrl { get { return "https://app.local/" + page + "?wallpaper=1"; } }
 
-    // 显示器布局（物理像素，虚拟桌面坐标）：me 是这个窗口负责的显示器，all 是全部显示器。
-    // 跨屏的主题（书桌）据此把几块屏幕拼成同一张桌子；其他主题忽略这条消息
+    // 显示器布局（物理像素，虚拟桌面坐标）：me 是这个窗口负责的显示器，all 是显示同一个主题的显示器。
+    // 跨屏的主题（书桌、编辑器……）据此把几块屏幕拼成一整块；其他主题忽略这条消息
     string ScreensJson()
     {
+        List<Rectangle> all = ScreensFor != null ? ScreensFor(ThemeId) : null;
+        if (all == null || all.Count == 0) { all = new List<Rectangle>(); foreach (Screen s in Screen.AllScreens) all.Add(s.Bounds); }
+        if (!all.Contains(screen)) all.Add(screen);
         var sb = new StringBuilder();
         sb.Append("{\"t\":\"screens\",\"me\":").Append(RectJson(screen)).Append(",\"all\":[");
-        Screen[] all = Screen.AllScreens;
-        for (int i = 0; i < all.Length; i++)
+        for (int i = 0; i < all.Count; i++)
         {
             if (i > 0) sb.Append(',');
-            sb.Append(RectJson(all[i].Bounds));
+            sb.Append(RectJson(all[i]));
         }
         return sb.Append("]}").ToString();
     }
+    public void PostScreens() { Post(ScreensJson()); }
     static string RectJson(Rectangle r)
     {
         return "[" + r.X + "," + r.Y + "," + r.Width + "," + r.Height + "]";
     }
 
     // 切换主题：换页面；新页面就绪后会重新收到设置和图标
-    public void LoadPage(string newPage)
+    public void LoadPage(string newPage, string themeId)
     {
         page = newPage;
+        ThemeId = themeId;
         SystemStats.Unsubscribe(this);
         if (web.CoreWebView2 == null) return;
         try { web.CoreWebView2.Navigate(PageUrl); }

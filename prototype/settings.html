@@ -138,6 +138,27 @@
   }
   .theme.on .badge { background: var(--accent); color: var(--accent-ink); }
   .theme.on .badge::before { content: ""; width: 4px; height: 4px; background: currentColor; border-radius: 50%; }
+  .theme.used:not(.on) .badge { color: var(--text); box-shadow: inset 0 0 0 1px var(--line); }
+
+  /* ---------- 显示器：按实际排列画出几块屏幕，点一块单独换壁纸 ---------- */
+  .monitors { flex: none; margin: -8px 0 18px; padding: 14px 16px 16px; border-radius: 20px; background: var(--panel); }
+  .monitors[hidden] { display: none; }
+  .mon-top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  .mon-top .section-title { margin: 0; }
+  .mon-hint { color: var(--muted); font-size: 11px; }
+  .mon-bar { display: flex; align-items: stretch; gap: 14px; }
+  .mon-all, .mon { border: 1px solid var(--line); background: var(--panel-2); color: var(--text); font: inherit; cursor: pointer;
+    transition: border-color .12s, box-shadow .12s, background .12s; }
+  .mon-all { flex: none; padding: 0 18px; border-radius: 14px; font-weight: 600; }
+  .mon-all:hover, .mon:hover { border-color: rgba(128, 128, 128, .6); }
+  .mon-all.on, .mon.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .mon-map { position: relative; flex: 1; min-width: 0; height: 84px; }
+  .mon { position: absolute; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    padding: 4px 6px; border-radius: 10px; overflow: hidden; }
+  .mon b { font-size: 14px; line-height: 1; font-weight: 650; }
+  .mon b small { font-size: 9px; font-weight: 600; color: var(--muted); margin-left: 4px; letter-spacing: .02em; }
+  .mon span { font-size: 10.5px; color: var(--muted); max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mon.on span { color: var(--text); }
   .theme .name { margin-top: 12px; font-weight: 650; font-size: 22px; line-height: 1.2; letter-spacing: -.035em; }
   .theme .desc { margin-top: 7px; color: var(--muted); font-size: 11px; line-height: 1.5; min-height: 3em;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }   /* 两行摘要，完整说明在右侧 */
@@ -294,6 +315,10 @@
       <h1 data-i18n="collectionTitle">选一片风景。</h1>
       <p data-i18n="collectionSubtitle">让图标成为风景的一部分。</p>
     </div>
+    <div class="monitors" id="monitors" hidden>
+      <div class="mon-top"><span class="section-title" data-i18n="monitorsTitle">显示器</span><span class="mon-hint" data-i18n="monitorsHint">选一块显示器单独换壁纸；选「所有显示器」时统一更换</span></div>
+      <div class="mon-bar"><button class="mon-all" id="monAll" data-i18n="monitorAll">所有显示器</button><div class="mon-map" id="monMap"></div></div>
+    </div>
     <div class="update-notice" id="updateNotice" hidden role="status" aria-live="polite">
       <span class="update-symbol" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13V3m0 0L6.5 6.5M10 3l3.5 3.5"/><path d="M4 12v3.5A1.5 1.5 0 0 0 5.5 17h9a1.5 1.5 0 0 0 1.5-1.5V12"/></svg></span>
       <div class="update-copy"><b data-i18n="updateAvailable">有更新可用</b><p id="updateVersion"></p></div>
@@ -384,7 +409,9 @@
 const host = window.chrome && window.chrome.webview;
 const send = m => { if (host) host.postMessage(JSON.stringify(m)); };
 
-const state = { registry0: null, registry: null, theme: 'beach', params: {}, screen: null, icons: null,
+// theme：右边正在看 / 调的主题（选中显示器的主题）；defaultTheme：所有显示器的默认主题；monitors：宿主给的显示器清单；sel：选中的显示器（'all' 或设备名）
+const state = { registry0: null, registry: null, theme: 'beach', defaultTheme: 'beach', monitors: [], sel: 'all', screen0: null,
+  params: {}, screen: null, icons: null,
   langSetting: 'auto', langSys: 'zh-CN', autostartWarn: false, autostartSw: '',
   updateVersion: '', updateStatus: '', updateProgress: -1, updateError: '' };
 const $ = id => document.getElementById(id);
@@ -463,7 +490,7 @@ async function setLang(code) {
 // 换了语言：界面上的字都重新填一遍（预览不用重新加载）
 function rerenderTexts() {
   if (!state.screen) return;
-  renderHead(); renderThemes(); renderControls(); updateFoot(); shareBusy(shareState); showAutostartWarn(); showUpdate(); updatePurchaseText();
+  renderHead(); renderMonitors(); renderThemes(); renderControls(); updateFoot(); shareBusy(shareState); showAutostartWarn(); showUpdate(); updatePurchaseText();
 }
 $('lang').addEventListener('change', e => {
   state.langSetting = e.target.value;
@@ -489,12 +516,59 @@ function fmt(p, v) {
 }
 
 const thumbUrl = (value, id) => window.DESKLAND_THUMBS?.[id] || String(value || '').match(/^url\(([^)]+)\)/)?.[1] || '';
+/* ---------- 显示器：每块屏幕可以用不同的主题 ---------- */
+const multiMon = () => state.monitors.length > 1;
+const monByKey = k => state.monitors.find(m => m.key === k);
+const readyTheme = id => themeById(id) && themeById(id).status === 'ready' ? id : null;
+const themeOfMon = m => readyTheme(m.theme) || readyTheme(state.defaultTheme) || 'beach';
+function themeOfSel() {
+  const m = state.sel !== 'all' && monByKey(state.sel);
+  return m ? themeOfMon(m) : readyTheme(state.defaultTheme) || 'beach';
+}
+function screenOfSel() {                                     // 预览按选中的那块屏幕的比例（所有显示器：主显示器）
+  const m = (state.sel !== 'all' && monByKey(state.sel)) || state.monitors.find(x => x.primary);
+  return m ? { w: m.w, h: m.h } : state.screen0;
+}
+function renderMonitors() {
+  $('monitors').hidden = !multiMon();
+  if (!multiMon()) return;
+  $('monAll').classList.toggle('on', state.sel === 'all');
+  $('monAll').setAttribute('aria-pressed', state.sel === 'all');
+  // 按实际排列等比缩小，放进 mon-map
+  const map = $('monMap'), box = map.getBoundingClientRect();
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  for (const m of state.monitors) { x0 = Math.min(x0, m.x); y0 = Math.min(y0, m.y); x1 = Math.max(x1, m.x + m.w); y1 = Math.max(y1, m.y + m.h); }
+  const k = Math.min((box.width || 400) / (x1 - x0), (box.height || 84) / (y1 - y0)), ox = ((box.width || 400) - (x1 - x0) * k) / 2;
+  map.innerHTML = state.monitors.map((m, i) => {
+    const on = state.sel === m.key, th = themeById(themeOfMon(m));
+    return `<button class="mon${on ? ' on' : ''}" data-key="${m.key}" aria-pressed="${on}" title="${t('monitorN', { n: i + 1 })}${m.primary ? ' · ' + t('monitorPrimary') : ''}"
+      style="left:${ox + (m.x - x0) * k + 3}px;top:${(m.y - y0) * k + 3}px;width:${Math.max(24, m.w * k - 6)}px;height:${Math.max(24, m.h * k - 6)}px">
+      <b>${i + 1}${m.primary ? `<small>${t('monitorPrimary')}</small>` : ''}</b><span>${th ? th.name : ''}</span></button>`;
+  }).join('');
+}
+function selectMonitor(key) {
+  if (key === state.sel) return;
+  state.sel = key;
+  send({ t: 'monitor', key });                               // 宿主回那块屏幕的图标
+  state.screen = screenOfSel();
+  const th = themeOfSel(), changed = th !== state.theme;
+  state.theme = th;
+  renderMonitors();
+  if (changed) showTheme(); else { renderThemes(); layoutPreview(); }
+}
+$('monAll').addEventListener('click', () => selectMonitor('all'));
+$('monMap').addEventListener('click', e => { const b = e.target.closest('.mon'); if (b) selectMonitor(b.dataset.key); });
+addEventListener('resize', renderMonitors);
+
 function renderThemes() {
   $('themes').innerHTML = state.registry.themes.map(th => {
     const locked = th.locked === true, ready = th.status === 'ready', on = th.id === state.theme;
     const label = locked ? t('lockedTitle', { name: th.name }) : th.name;
-    return `<button class="theme${on ? ' on' : ''}${locked ? ' locked' : ''}" data-id="${th.id}" data-locked="${locked}" aria-pressed="${on}" aria-label="${label}" ${ready || locked ? '' : 'disabled'}>
-      <div class="theme-copy"><div class="theme-meta"><span class="badge">${t(on ? 'badgeOn' : locked ? 'badgeLocked' : ready ? 'badgeReady' : 'badgeSoon')}</span>
+    // 多块显示器：标出哪几块屏幕在用这个主题
+    const users = multiMon() ? state.monitors.map((m, i) => themeOfMon(m) === th.id ? i + 1 : 0).filter(Boolean) : [];
+    const badge = users.length ? t('badgeOnMonitors', { list: users.join(', ') }) : t(on && !multiMon() ? 'badgeOn' : locked ? 'badgeLocked' : ready ? 'badgeReady' : 'badgeSoon');
+    return `<button class="theme${on ? ' on' : ''}${users.length ? ' used' : ''}${locked ? ' locked' : ''}" data-id="${th.id}" data-locked="${locked}" aria-pressed="${on}" aria-label="${label}" ${ready || locked ? '' : 'disabled'}>
+      <div class="theme-copy"><div class="theme-meta"><span class="badge">${badge}</span>
         <svg class="theme-arrow" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M5 15 15 5M5 5h10v10"/></svg></div>
         <div class="name">${th.name}</div></div>
       <div class="thumb" style="background:${th.thumb || '#ccc'}">${thumbUrl(th.thumb, th.id) ? `<img src="${thumbUrl(th.thumb, th.id)}" alt="" decoding="async">` : ''}${locked ? `<span class="lock-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="11" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span>` : ''}</div></button>`;
@@ -521,11 +595,16 @@ $('themes').addEventListener('click', e => {
   const b = e.target.closest('.theme');
   if (!b || b.disabled) return;
   if (b.dataset.locked === 'true') { showPurchase(b.dataset.id); return; }
-  if (b.dataset.id === state.theme) return;
-  state.theme = b.dataset.id;
-  send({ t: 'theme', id: state.theme });
+  const id = b.dataset.id;
+  // 选中"所有显示器"时，即使右边已经是这个主题，只要还有屏幕用别的主题，也要统一过去
+  if (id === state.theme && (state.sel !== 'all' || state.monitors.every(m => themeOfMon(m) === id))) return;
+  send({ t: 'theme', id, monitor: state.sel });
+  if (state.sel === 'all') { state.defaultTheme = id; state.monitors.forEach(m => { m.theme = id; }); }
+  else { const m = monByKey(state.sel); if (m) m.theme = id; }
+  state.theme = id;
   if (seedOf(state.theme) === undefined) setSeed(newSeed(), false);   // 还没有种子：给一个，桌面和预览从一开始就是同一张
   showTheme();
+  renderMonitors();
 });
 
 /* ---------- 刷新：换一张（新的种子，按主题存进设置；桌面和预览用同一个种子） ---------- */
@@ -787,9 +866,14 @@ function onHost(m) {
     state.langSetting = m.lang || 'auto';
     state.langSys = m.langSys || 'zh-CN';
     setLang(m.langEff || state.langSys).then(() => {        // 先按界面语言把文字表读进来，再画界面
-      state.theme = themeById(m.theme) && themeById(m.theme).status === 'ready' ? m.theme : 'beach';
+      state.defaultTheme = readyTheme(m.theme) || 'beach';
+      state.monitors = Array.isArray(m.monitors) ? m.monitors : [];
+      state.sel = m.selected === 'all' || monByKey(m.selected) ? m.selected : 'all';
+      state.theme = themeOfSel();
       state.params = m.params || {};
-      state.screen = m.screen;
+      state.screen0 = m.screen;
+      state.screen = screenOfSel();
+      renderMonitors();
       $('autostart').checked = !!m.autostart;
       state.autostartWarn = !!m.autostartWarn;
       state.autostartSw = m.autostartSw || '';
@@ -798,10 +882,13 @@ function onHost(m) {
       showTheme();
       document.documentElement.classList.add('ready');
     });
-  } else if (m.t === 'themeChanged') {
-    if (!themeById(m.id) || themeById(m.id).status !== 'ready') return;
-    state.theme = m.id;
+  } else if (m.t === 'themeChanged') {                       // 宿主拒绝了切换：退回它记着的主题
+    if (!readyTheme(m.id)) return;
+    const mon = m.monitor && m.monitor !== 'all' && monByKey(m.monitor);
+    if (mon) mon.theme = m.id; else state.defaultTheme = m.id;
+    state.theme = themeOfSel();
     showTheme();
+    renderMonitors();
   } else if (m.t === 'updateState') {
     state.updateVersion = String(m.version || '').trim();
     state.updateStatus = m.status || (state.updateVersion ? 'available' : '');
@@ -834,7 +921,11 @@ function mockHost() {
   for (let c = 0; c < 4; c++) for (let row = 0; row < 9; row++) cell(c, row);
   for (const [c, row] of [[6, 0], [6, 1], [7, 3], [8, 3], [8, 4], [12, 1], [13, 1], [14, 1], [13, 2], [14, 2], [20, 0], [21, 0], [19, 5], [20, 5]]) cell(c, row);
   const bl = browserLang();
-  onHost({ t: 'init', theme: 'beach', params: {}, screen: { w: W * k, h: H * k }, autostart: false, lang: 'auto', langEff: bl, langSys: bl });
+  // ?multi：模拟两块显示器（右边一块 1920×1080 用书桌主题），调显示器选择的界面
+  const monitors = new URLSearchParams(location.search).has('multi') ? [
+    { key: '\\\\.\\DISPLAY1', primary: true, x: 0, y: 0, w: W * k, h: H * k, theme: 'beach' },
+    { key: '\\\\.\\DISPLAY2', primary: false, x: W * k, y: 0, w: 1920, h: 1080, theme: 'desk' }] : [];
+  onHost({ t: 'init', theme: 'beach', params: {}, screen: { w: W * k, h: H * k }, monitors, selected: 'all', autostart: false, lang: 'auto', langEff: bl, langSys: bl });
   onHost({ t: 'icons', vis: true, r });
   if (new URLSearchParams(location.search).has('updateDemo')) onHost({ t: 'updateState', version: '0.2.0', status: 'available', progress: -1 });
 }

@@ -24,6 +24,7 @@ This is the **free, open-source Preview**, not a time-limited trial. It includes
 - **Adaptive scenery:** uses the real positions of desktop icons and transitions smoothly when they move.
 - **Two complete themes:** every setting for Beach and Meadow is included and saved between sessions.
 - **Made for the desktop:** tray controls, startup on sign-in and automatic pause when a window is maximized or full-screen.
+- **Multiple monitors:** each monitor can show its own theme, or one theme everywhere. Themes that span screens (Desk, Code Editor, Git Graph, Syntax Tree) join only the monitors showing that same theme.
 - **Private sharing:** image and animation exports use sample icons and color blocks, never a screenshot of your desktop or real file names.
 - **Independent installation:** Preview uses its own install directory, settings, startup entry and instance identity, so it can coexist with other Deskland builds.
 - **English and Simplified Chinese:** no sign-in, purchase restoration, update service or store API is included.
@@ -54,6 +55,25 @@ Run the program again or double-click its tray icon to open Settings. To exit an
 ```powershell
 host\bin\Deskland.exe --exit
 ```
+
+### Running Deskland
+
+| Command | What it does |
+| --- | --- |
+| `host\bin\Deskland.exe` | Start Deskland (opens Settings if it is already running) |
+| `host\bin\Deskland.exe --settings` | Open Settings in the running instance |
+| `host\bin\Deskland.exe --menu` | Show the tray menu at the mouse pointer (same as Ctrl+Alt+H) |
+| `host\bin\Deskland.exe --exit` | Exit and restore the original Windows wallpaper |
+
+To rebuild after changing the host (`host/*.cs`), exit first — the running program locks `Deskland.exe`:
+
+```powershell
+host\bin\Deskland.exe --exit
+powershell -ExecutionPolicy Bypass -File host\build.ps1
+host\bin\Deskland.exe
+```
+
+Changes to theme pages (`prototype/*.html`, `*.js`, `*.json`) need no rebuild: choose **Reload** in the tray menu.
 
 Preview settings and logs are stored separately in `%LOCALAPPDATA%\DesklandPreview`.
 
@@ -100,7 +120,7 @@ The installer targets the current user's `Programs\Deskland Preview` directory a
 
 ## Known limitations
 
-- With multiple monitors, the settings preview and sharing use the primary monitor. Monitors with different display scaling share the primary monitor's scale for drawing details.
+- With multiple monitors, the settings preview and sharing use the monitor selected in Settings (the primary monitor when "All monitors" is selected). Monitors with different display scaling share the primary monitor's scale for drawing details.
 - Windows Spotlight or a wallpaper slideshow can briefly flash when Windows changes the background image.
 - Preview does not include account sign-in, entitlement restoration, automatic updates or the other themes' implementation.
 
@@ -138,6 +158,7 @@ Deskland 是一款 Windows 自适应动态壁纸。移动、添加或删除桌�
 - **图标自适应：**读取真实桌面图标的位置，在移动、添加或删除时平滑调整场景。
 - **两个完整主题：**沙滩和草地的全部参数均可调整并自动保存。
 - **适合常驻桌面：**托盘控制、开机自动启动，前台窗口最大化或全屏时自动暂停。
+- **多个显示器：**每块显示器可以用不同的主题，也可以统一用一个。跨屏主题（书桌、代码编辑器、Git 分支图、语法树）只把显示同一主题的屏幕连在一起。
 - **隐私分享：**图片和动画使用示例图标与名字色块，不截取桌面窗口或真实文件名。
 - **独立安装：**安装目录、用户数据、启动项和运行实例标识均独立，可与其他 Deskland 版本共存。
 - **简体中文和英文：**不包含登录、购买恢复、自动更新或商店接口。
@@ -168,6 +189,25 @@ host\bin\Deskland.exe
 ```powershell
 host\bin\Deskland.exe --exit
 ```
+
+#### 运行命令
+
+| 命令 | 作用 |
+| --- | --- |
+| `host\bin\Deskland.exe` | 启动 Deskland（已在运行时打开设置） |
+| `host\bin\Deskland.exe --settings` | 在运行中的程序里打开设置 |
+| `host\bin\Deskland.exe --menu` | 在鼠标位置弹出托盘菜单（同 Ctrl+Alt+H） |
+| `host\bin\Deskland.exe --exit` | 退出并恢复系统原壁纸 |
+
+修改宿主代码（`host/*.cs`）后重新编译前要先退出，运行中的程序会占用 `Deskland.exe`：
+
+```powershell
+host\bin\Deskland.exe --exit
+powershell -ExecutionPolicy Bypass -File host\build.ps1
+host\bin\Deskland.exe
+```
+
+只改主题页面（`prototype/*.html`、`*.js`、`*.json`）不用重新编译，在托盘菜单里点"重新载入"即可。
 
 体验版的设置与日志独立保存在 `%LOCALAPPDATA%\DesklandPreview`。
 
@@ -212,7 +252,7 @@ powershell -ExecutionPolicy Bypass -File tools\build-installer.ps1
 
 ### 已知限制
 
-- 多显示器时，设置页预览和分享使用主显示器；缩放比例不同的显示器按主显示器的比例绘制细节。
+- 多显示器时，设置页预览和分享使用设置页里选中的显示器（选"所有显示器"时用主显示器）；缩放比例不同的显示器按主显示器的比例绘制细节。
 - 使用 Windows 聚焦或壁纸幻灯片时，系统换图可能造成短暂闪烁。
 - 体验版不包含账号登录、购买恢复、自动更新或其他主题实现。
 
