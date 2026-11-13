@@ -443,11 +443,15 @@ void main() {
     const tug=meadowBoyTugPose(time-pullStarted);
     // 快速挥动持线手和专门拉线共用反馈，避免手先动、等下一次拉线才带动风筝。
     const linePull=activity.back?0:Math.max(tug.pull,meadowBoyWavePull(time,tug));
+    // 跟着声音（草地主题的选项）：低音是一阵风，把风筝往外推高、抖得更快；节拍时被风猛地掀一下。
+    const audio=window.meadowAudio,audioWind=audio?audio.wind:0;
+    if(audio&&audio.hit&&!activity.back){kiteReaction.vx+=55;kiteReaction.vy-=35;kiteReaction.spin+=(time*7.3%2-1)*2.2;}
     meadowBoyKiteReaction(kiteReaction,dt,Math.max(0,linePull-lastLinePull));lastLinePull=linePull;
     // 跑动时平滑加强横向摆幅，起跑、停步后逐渐恢复平时的轻摆。
     const runWind=activity.running?Math.sin(Math.PI*activity.progress):0;
-    const gust=(Math.sin(time*4.8)*60+Math.sin(time*7.1)*8)*runWind;
-    const baseKx=215+Math.sin(time*.72)*21+Math.sin(time*1.23)*5+gust,baseKy=205+Math.sin(time*.49+.6)*10;
+    const gust=(Math.sin(time*4.8)*60+Math.sin(time*7.1)*8)*runWind
+      +audioWind*(28+Math.sin(time*5.6)*9+Math.sin(time*9.3)*4);
+    const baseKx=215+Math.sin(time*.72)*21+Math.sin(time*1.23)*5+gust,baseKy=205+Math.sin(time*.49+.6)*10-audioWind*(16+Math.sin(time*4.1)*6);
     const desiredKite={x:position.x+baseKx*s,y:position.y+baseKy*s};
     if(!kitePosition||lastScale!==s)kitePosition={...desiredKite};lastScale=s;
     const follow=1-Math.exp(-dt/0.23);

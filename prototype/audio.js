@@ -14,7 +14,7 @@
   const BANDS = 32;
   const state = { on: false, lv: 0, bass: 0, mid: 0, high: 0, bands: new Float32Array(BANDS), beat: false, beatAge: 99, real: false };
   const subs = new Set();
-  let started = false, lastBeats = -1, lastBeatAt = 0, demoTimer = 0;
+  let started = false, lastBeats = -1, lastBeatAt = -1e9, demoTimer = 0;
 
   function emit() {
     state.beatAge = (performance.now() - lastBeatAt) / 1000;
@@ -61,24 +61,41 @@
     emit();
   }
 
+  const preview = new URLSearchParams(location.search).has('preview');
+  const host = !preview && window.chrome && window.chrome.webview;
+  let listening = false;
+
   function start() {
     if (started) return;
     started = true;
-    const preview = new URLSearchParams(location.search).has('preview');
-    const host = window.chrome && window.chrome.webview;
-    if (host && !preview) {
-      host.addEventListener('message', ev => {
-        if (typeof ev.data !== 'string' || ev.data.indexOf('"t":"audio"') < 0) return;
-        try { take(JSON.parse(ev.data)); } catch (e) { }
-      });
+    if (host) {
+      if (!listening) {
+        listening = true;
+        host.addEventListener('message', ev => {
+          if (!started || typeof ev.data !== 'string' || ev.data.indexOf('"t":"audio"') < 0) return;
+          try { take(JSON.parse(ev.data)); } catch (e) { }
+        });
+      }
       host.postMessage('audio|on');
     } else {
       demoTimer = setInterval(demo, 33);
     }
   }
 
+  // 没有订阅者了：让宿主关掉声卡回环（或停掉演示）
+  function stop() {
+    if (!started) return;
+    started = false;
+    if (host) host.postMessage('audio|off');
+    else { clearInterval(demoTimer); demoTimer = 0; }
+    state.on = false; state.lv = state.bass = state.mid = state.high = 0; state.bands.fill(0); lastBeats = -1;
+  }
+
   window.DesklandAudio = {
     state,
-    subscribe(fn) { subs.add(fn); start(); return () => subs.delete(fn); },
+    subscribe(fn) {
+      subs.add(fn); start();
+      return () => { if (subs.delete(fn) && subs.size === 0) stop(); };
+    },
   };
 })();

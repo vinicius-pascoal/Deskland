@@ -146,6 +146,7 @@
 <div id="nogl">当前浏览器不支持 WebGL2，无法运行原型。</div>
 
 <script src="beach-palms.js"></script>
+<script src="audio.js"></script>
 <script>
 'use strict';
 
@@ -164,7 +165,7 @@ const PREVIEW = QS.has('preview');     // 预览模式：设置窗口里的缩�
 const P = {
   sigma: 85, warp: 34, shallow: 260, shoal: 110,
   speed: 22, runup: 120, wave: 1.6, spacing: 70, waves: 1, grain: 1, quality: 2,   // quality 2：按屏幕的实际像素画（150% 缩放时不再放大发糊）
-  kayaks: 2, birds: 3, palms: 4, debug: false, snap: true, cap30: true,
+  kayaks: 2, birds: 3, palms: 4, audio: 0, debug: false, snap: true, cap30: true,
 };
 const DEFAULTS = Object.assign({}, P);
 const SLIDERS = [
@@ -175,6 +176,7 @@ const SLIDERS = [
   { key: 'shallow', label: '浅海宽度', min: 120, max: 700, step: 1,    fmt: v => v + ' px' },
   { key: 'kayaks',  label: '皮划艇',   min: 0,   max: 4,   step: 1,    fmt: v => v + ' 艘',  act: 'kayaks' },
   { key: 'birds',   label: '海鸟',     min: 0,   max: 8,   step: 1,    fmt: v => v + ' 只',  act: 'birds' },
+  { key: 'audio',   label: '跟着声音动', min: 0, max: 1,   step: 1,    fmt: v => v ? '开启' : '关闭', act: 'audio' },
 ];
 
 /* ======================================================================
@@ -348,6 +350,7 @@ precision highp float;
 uniform sampler2D uNoise, uFA, uFB;
 uniform vec2 uRes, uGrid;
 uniform float uScale, uSeed, uStep, uMix, uTime, uSpeed, uRunup, uShallow, uShoal, uGrain, uDebug, uWave, uSigma, uSpacing, uWaves;
+uniform float uFoam;           // 浪花水雾的多少：平时 1，跟着声音时中音越响越多
 uniform float uKayN;
 uniform vec4 uKay[4];          // x, y, 朝向, 划桨相位
 uniform vec4 uRip[6];
@@ -556,10 +559,10 @@ void main() {
     float brk = 1.0 - ss(8.0, 55.0, s);
     float cw = wv * (1.0 + 0.8 * brk);
     float crest = (1.0 - ss(0.7 * cw, 1.9 * cw, dpx)) * vis * (0.55 + 0.4 * brk);
-    float crestSpray = exp(-fr * lam / (7.0 * cw)) * vis * (0.25 + 0.4 * brk);        // 浪线后方的颗粒水雾
+    float crestSpray = exp(-fr * lam / (7.0 * cw * uFoam)) * vis * (0.25 + 0.4 * brk) * uFoam;   // 浪线后方的颗粒水雾
     // 浪到岸的那一刻再轻轻迸一下水雾（只是推上来的浪的延续，不是主角）
     float burst = exp(-fu * 4.5) * ss(0.0, 0.04, fu);
-    float spray = exp(-dd / (6.0 * wv)) * burst * energy * 0.45;
+    float spray = exp(-dd / (6.0 * wv * uFoam)) * burst * energy * 0.45 * uFoam;
     float foam = max(crest, step(g2, max(spray, crestSpray)));
     col = mix(col, FOAM, foam);
   } else {
@@ -1037,6 +1040,29 @@ function resize() {
 
 const T0 = performance.now();
 let lastT = 0, fpsEMA = 0, frameN = 0, frameMs = 0;
+// 跟着声音动（默认关闭）：低音和节拍推高浪头、冲得更远，中音激起更多浪花。
+// 关闭时不订阅（宿主也不采集），AU 全是 0，画面和原来完全一样
+const AU = { bass: 0, mid: 0, kick: 0, wave: 0, foam: 0 };
+let audioOff = null;
+function syncAudio() {
+  const want = P.audio === 1 && !!window.DesklandAudio;
+  if (want && !audioOff) {
+    audioOff = DesklandAudio.subscribe(a => {
+      AU.bass = a.on ? a.bass : 0; AU.mid = a.on ? a.mid : 0;
+      if (a.beat) AU.kick = 1;
+    });
+  } else if (!want && audioOff) {
+    audioOff(); audioOff = null;
+    AU.bass = AU.mid = AU.kick = 0;
+  }
+}
+// 上升快、回落慢，浪头不会一帧一帧地跳
+function follow(cur, target, dt, up, down) { return cur + (target - cur) * (1 - Math.exp(-dt / (target > cur ? up : down))); }
+function stepAudio(dt) {
+  AU.kick *= Math.exp(-dt * 3.5);
+  AU.wave = follow(AU.wave, Math.min(1, Math.max(AU.bass * 1.2, AU.kick * 0.9)), dt, 0.12, 0.6);
+  AU.foam = follow(AU.foam, Math.min(1, AU.mid * 1.6), dt, 0.1, 0.45);
+}
 const ripBuf = new Float32Array(24), kayBuf = new Float32Array(16), birdBuf = new Float32Array(32);
 const px = new Uint8Array(4);
 let paused = false;                              // 宿主通知：前台窗口最大化 / 全屏 → 暂停
@@ -1051,6 +1077,7 @@ function frame(now) {
   curMix = e < 0.5 ? 2 * e * e : 1 - Math.pow(-2 * e + 2, 2) / 2;
   stepKayaks(dt, now);
   stepBirds(dt);
+  stepAudio(dt);
   draw(now);
   if (++frameN % 10 === 0) updateStats();
 }
@@ -1083,9 +1110,10 @@ function configureBeachPass(now, pass) {
   gl.uniform1f(U.uStep, STEP);
   gl.uniform1f(U.uMix, curMix);
   gl.uniform1f(U.uTime, (now - T0) / 1000);
-  gl.uniform1f(U.uSpeed, P.speed); gl.uniform1f(U.uRunup, P.runup);
+  gl.uniform1f(U.uSpeed, P.speed); gl.uniform1f(U.uRunup, P.runup * (1 + 0.5 * AU.wave));
   gl.uniform1f(U.uShallow, P.shallow); gl.uniform1f(U.uShoal, P.shoal); gl.uniform1f(U.uGrain, P.grain);
-  gl.uniform1f(U.uWave, P.wave); gl.uniform1f(U.uSigma, P.sigma);
+  gl.uniform1f(U.uWave, P.wave * (1 + 1.1 * AU.wave)); gl.uniform1f(U.uSigma, P.sigma);
+  gl.uniform1f(U.uFoam, 1 + 1.6 * AU.foam);
   gl.uniform1f(U.uSpacing, P.spacing); gl.uniform1f(U.uWaves, P.waves);
   gl.uniform1f(U.uDebug, P.debug ? 1 : 0);
   gl.uniform1f(U.uKayN, kayaks.length);
@@ -1127,6 +1155,7 @@ for (const s of SLIDERS) {
     else if (s.act === 'size') { resize(); refresh(); }
     else if (s.act === 'kayaks') syncKayaks();
     else if (s.act === 'birds') syncBirds();
+    else if (s.act === 'audio') syncAudio();
   });
   slidersEl.appendChild(wrap);
 }
@@ -1218,17 +1247,20 @@ requestAnimationFrame(frame);
 function applySettings(v) {
   if (typeof v.seed === 'number' && v.seed !== seed) reseed(v.seed);   // 设置窗口的"刷新"：换一张（桌面和预览用同一个种子）
   // 只接受面板上有的参数：已经去掉的选项（颗粒感、渲染精度）即使旧的设置文件里还存着也不生效
-  let field = false, kay = false, bird = false;
+  let field = false, kay = false, bird = false, audio = false;
   for (const k in v) {
     if (!SLIDERS.some(s => s.key === k) || typeof v[k] !== typeof P[k] || P[k] === v[k]) continue;
+    if (k === 'audio' && v[k] !== 0 && v[k] !== 1) continue;
     P[k] = k === 'palms' ? Math.max(0, Math.min(10, Math.round(Number.isFinite(v[k]) ? v[k] : DEFAULTS.palms))) : v[k];
     if (k === 'sigma' || k === 'warp') field = true;
     else if (k === 'kayaks') kay = true;
     else if (k === 'birds') bird = true;
+    else if (k === 'audio') audio = true;
   }
   if (field && FB) refresh();
   if (kay) syncKayaks();
   if (bird) syncBirds();
+  if (audio) syncAudio();
 }
 
 function drawGhosts() {

@@ -160,10 +160,10 @@ const PREVIEW = QS.has('preview');     // 预览模式：设置窗口里的缩�
 const P = {
   sigma: 72, warp: 40, edge: 10, cover: 0.3, flow: 1, grain: 1, quality: 2,   // quality 2：按屏幕的实际像素画（150% 缩放时不再放大发糊）
   debug: false, snap: true, cap30: true,
-  showBoy: 1, showCat: 1, adaptive: 1,
+  showBoy: 1, showCat: 1, adaptive: 1, audio: 0,
 };
 const DEFAULTS = Object.assign({}, P);
-const DISPLAY_KEYS = ['showBoy', 'showCat', 'adaptive'];
+const DISPLAY_KEYS = ['showBoy', 'showCat', 'adaptive', 'audio'];
 const SLIDERS = [
   { key: 'sigma',  label: '云团大小', min: 40,  max: 200, step: 1,    fmt: v => v + ' px', act: 'field' },
   { key: 'cover',  label: '草地上的云', min: 0,   max: 1,   step: 0.01, fmt: v => Math.round(v * 100) + '%' },
@@ -341,6 +341,7 @@ precision highp float;
 uniform sampler2D uNoise, uFA, uFB;
 uniform vec2 uRes, uGrid;
 uniform float uScale, uSeed, uStep, uMix, uTime, uDebug, uEdge;
+uniform float uSway;             // 草跟着声音摆动的幅度（弧度）：平时 0，草是静止的排线
 #ifdef MEADOW_ACTOR
 uniform sampler2D uActor, uActorShadow;
 uniform vec4 uActorRect;
@@ -411,6 +412,8 @@ float grassInk(vec2 p) {
     float dens = 0.75 * ss(0.42, 0.72, N(cp, 900.0).r) * ss(0.35, 0.6, N(cp + 50.0, 380.0).g) + 0.02;   // 一片片、一簇簇地画，中间留空
     if (h > dens) continue;
     float ang = (N(cp, 1400.0).g - 0.5) * 0.7 + (hash2(c + 7.7) - 0.5) * 0.3;    // 以接近水平为主，一片里的线大致平行
+    // 跟着声音：一阵阵风从左往右扫过草地（相位沿 x 推进），每一笔再带一点自己的抖动
+    if (uSway > 0.001) ang += uSway * (sin(uTime * 2.6 - cp.x * 0.018 + cp.y * 0.006) + 0.35 * sin(uTime * 7.0 + h * 40.0));
     float len = 2.5 + 3.0 * hash2(c + 1.9);                                      // 半长 2.5~5.5px
     vec2 ctr = cp + (vec2(hash2(c + 4.3), hash2(c + 5.9)) - 0.5) * vec2(2.0, 3.0);
     vec2 dir = vec2(cos(ang), sin(ang)) * len;
@@ -735,15 +738,16 @@ function uploadCircles(t) {
   const morphing = curMix < 1 || !massList || massList.W !== W || massList.H !== H;
   if (morphing || t - massT > 0.5) { massList = buildMassCircles(); massList.W = W; massList.H = H; massT = t; }
   const list = massList.slice();
+  const puff = 1 + 0.06 * AU.puff;                          // 跟着声音：节拍时每朵云鼓一下（只往外鼓，不会露出图标）
   for (let i = 0; i < list.length; i += 4) {
     const x = list[i], y = list[i + 1], r = list[i + 2], ph = list[i + 3];
-    list[i] = x + wobX(x, y, r, ph); list[i + 1] = y + wobY(x, y, r, ph);
+    list[i] = x + wobX(x, y, r, ph); list[i + 1] = y + wobY(x, y, r, ph); list[i + 2] = r * puff;
   }
   // 天上的小云
   for (const c of skyClouds) {
     const g = c.grow * c.grow * (3 - 2 * c.grow);
     c.circles.forEach(([dx, dy, r, ph], i) => {
-      const rb = r * g * (1 + 0.04 * Math.sin(flowT * (0.09 + 0.035 * ph) + ph * 6.283 + i));
+      const rb = r * g * (1 + 0.04 * Math.sin(flowT * (0.09 + 0.035 * ph) + ph * 6.283 + i)) * puff;
       if (rb > 0.5) list.push(c.x + dx + wobX(dx, dy, r, ph), c.y + dy + wobY(dx, dy, r, ph), rb, ph);   // 天上的云：按云自己的坐标算，整朵飘的时候也在轻轻翻动
     });
   }
@@ -898,6 +902,31 @@ const T0 = performance.now();
 let lastT = 0, fpsEMA = 0, frameN = 0, frameMs = 0;
 const px = new Uint8Array(4);
 let paused = false;                              // 宿主通知：前台窗口最大化 / 全屏 → 暂停
+// 跟着声音动（默认关闭）：草随音量摆动，云随节拍鼓起，低音给风筝一阵风。
+// 关闭时不订阅（宿主也不采集），AU 全是 0，画面和原来完全一样
+const AU = { lv: 0, bass: 0, kick: 0, beat: false, hit: false, sway: 0, puff: 0, wind: 0 };
+let audioOff = null;
+function syncAudio() {
+  const want = P.audio === 1 && !!window.DesklandAudio;
+  if (want && !audioOff) {
+    audioOff = DesklandAudio.subscribe(a => {
+      AU.lv = a.on ? a.lv : 0; AU.bass = a.on ? a.bass : 0;
+      if (a.beat) { AU.kick = 1; AU.beat = true; }
+    });
+  } else if (!want && audioOff) {
+    audioOff(); audioOff = null;
+    AU.lv = AU.bass = AU.kick = 0; AU.beat = false;
+  }
+}
+function follow(cur, target, dt, up, down) { return cur + (target - cur) * (1 - Math.exp(-dt / (target > cur ? up : down))); }
+function stepAudio(dt) {
+  AU.kick *= Math.exp(-dt * 5);
+  AU.hit = AU.beat; AU.beat = false;                          // 这一帧刚来了一拍（只持续一帧）
+  AU.sway = follow(AU.sway, AU.lv, dt, 0.25, 0.9);            // 草：慢慢起风、慢慢停
+  AU.puff = follow(AU.puff, AU.kick, dt, 0.04, 0.25);          // 云：一拍一鼓
+  AU.wind = follow(AU.wind, Math.min(1, AU.bass * 1.3), dt, 0.15, 0.7);
+  window.meadowAudio = AU;                                     // meadow-boy.js 读 wind / kick 给风筝加风
+}
 function frame(now) {
   requestAnimationFrame(frame);
   if (paused) { lastT = 0; return; }
@@ -908,6 +937,7 @@ function frame(now) {
   const e = Math.min((now - morphT0) / morphDur, 1);
   curMix = e < 0.5 ? 2 * e * e : 1 - Math.pow(-2 * e + 2, 2) / 2;
   stepSkyClouds(dt);
+  stepAudio(dt);
   draw(now);
   if (++frameN % 10 === 0) updateStats();
 }
@@ -939,7 +969,8 @@ function draw(now) {
     gl.uniform1f(U.uDebug, P.debug ? 1 : 0);
     gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, circTex); gl.uniform1i(U.uCirc, 3);
     gl.uniform2f(U.uCGrid, cgW, cgH); gl.uniform1f(U.uCellG, CELL_G);
-    gl.uniform1f(U.uEdge, P.edge);
+    gl.uniform1f(U.uEdge, P.edge + 5 * AU.puff);              // 节拍时图标周围的云团也鼓一下
+    gl.uniform1f(U.uSway, 0.55 * AU.sway);
     if(actor){
       gl.activeTexture(gl.TEXTURE5);gl.bindTexture(gl.TEXTURE_2D,actor.actor);gl.uniform1i(U.uActor,5);
       gl.activeTexture(gl.TEXTURE6);gl.bindTexture(gl.TEXTURE_2D,actor.shadow);gl.uniform1i(U.uActorShadow,6);
@@ -1090,6 +1121,7 @@ function applySettings(v) {
     if (DISPLAY_KEYS.includes(k) && v[k] !== 0 && v[k] !== 1) continue;
     P[k] = v[k];
     if (k === 'adaptive') adaptiveChanged = true;
+    if (k === 'audio') syncAudio();
     if (k === 'sigma') field = true;
   }
   if (adaptiveChanged && FB) commit();
@@ -1134,6 +1166,7 @@ function startHostedMode() {
   host.postMessage('ready');
 }
 </script>
+<script src="audio.js"></script>
 <script src="meadow-boy.js"></script>
 <script src="meadow-cat.js"></script>
 <script src="share.js"></script>   <!-- 分享图片 / 分享动画（示例图标、名字是色块） -->

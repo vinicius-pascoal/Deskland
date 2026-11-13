@@ -145,7 +145,8 @@
       "groups": [
         "Shoreline",
         "Water",
-        "Details"
+        "Details",
+        "Sound"
       ],
       "params": {
         "palms": {
@@ -177,6 +178,14 @@
           "label": "Seabirds",
           "hint": "Gulls gliding and circling overhead",
           "unit": ""
+        },
+        "audio": {
+          "label": "React to sound",
+          "hint": "Waves rise and fall with whatever your PC is playing: bass lifts the swell, mids whip up the spray. Sound is analyzed locally; the microphone is never used.",
+          "options": [
+            "Off",
+            "On"
+          ]
         }
       }
     },
@@ -186,7 +195,8 @@
       "groups": [
         "Around icons",
         "Clouds",
-        "Characters"
+        "Characters",
+        "Sound"
       ],
       "params": {
         "sigma": {
@@ -215,6 +225,14 @@
           "options": [
             "Hide",
             "Show"
+          ]
+        },
+        "audio": {
+          "label": "React to sound",
+          "hint": "Grass sways with the volume, clouds puff on the beat and the bass sends a gust to the kite. Sound is analyzed locally; the microphone is never used.",
+          "options": [
+            "Off",
+            "On"
           ]
         }
       }
