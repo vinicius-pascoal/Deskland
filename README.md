@@ -12,18 +12,12 @@ This is the **free, open-source Preview**, not a time-limited trial. It includes
 
 ![Beach — included in Deskland Preview](docs/images/beach.webp)
 
-![Maldives — locked-theme preview](docs/images/maldives.webp)
-
-Meadow and Beach are included in Preview. Maldives is shown as a locked-theme preview.
-
 ## Included themes
 
 | Beach | Meadow |
 | --- | --- |
 | ![Beach theme](prototype/thumbs/beach.webp) | ![Meadow theme](prototype/thumbs/meadow.webp) |
 | Turquoise waves, kayaks, seabirds and coconut palms. | Drifting clouds and shadows, a boy flying a kite and a little black cat. |
-
-The theme browser also shows 11 locked themes as a preview of the full Wallpaper edition. **Only names, descriptions and thumbnails are included for those themes — not their page code, parameters or implementation.**
 
 ## Features
 
@@ -99,7 +93,7 @@ The installer targets the current user's `Programs\Deskland Preview` directory a
 | `prototype/ast.html` | Syntax Tree theme (one Program across all monitors) |
 | `prototype/dashboard.html` | System Dashboard theme (live CPU, memory, network and disk of this PC, sampled locally by the host) |
 | `prototype/settings.html` | Settings interface |
-| `prototype/themes.json` | Full free-theme definitions and locked-theme display metadata |
+| `prototype/themes.json` | Theme definitions (pages, parameters, defaults, thumbnails) |
 | `prototype/share.js` | Privacy-preserving image and animation sharing |
 | `prototype/assets/` | Images used by the included themes |
 | `tools/` | Installer build tooling |
@@ -138,8 +132,6 @@ Deskland 是一款 Windows 自适应动态壁纸。移动、添加或删除桌�
 | --- | --- |
 | ![沙滩主题](prototype/thumbs/beach.webp) | ![草地主题](prototype/thumbs/meadow.webp) |
 | 海浪、皮划艇、海鸟和椰子树。 | 漂浮的云与云影、放风筝的男孩和小黑猫。 |
-
-主题列表还展示另外 11 个锁定主题，帮助了解壁纸版内容。**这些锁定主题只有名称、简介和缩略图，不包含页面源码、参数或其他实现。**
 
 ### 功能
 
@@ -213,7 +205,7 @@ powershell -ExecutionPolicy Bypass -File tools\build-installer.ps1
 | `prototype/ast.html` | 语法树主题（多个显示器挂在同一个 Program 下） |
 | `prototype/dashboard.html` | 监控仪表盘主题（宿主在本机采样的实时 CPU、内存、网络、磁盘） |
 | `prototype/settings.html` | 设置界面 |
-| `prototype/themes.json` | 免费主题完整定义及锁定主题展示信息 |
+| `prototype/themes.json` | 主题定义（页面、参数、默认值、缩略图） |
 | `prototype/share.js` | 隐私保护的图片和动画分享 |
 | `prototype/assets/` | 随附主题图片素材 |
 | `tools/` | 安装包构建工具 |

@@ -45,8 +45,8 @@ $themeFiles = @('flat.html', 'meadow.html', 'space.html', 'desk.html', 'ide.html
 $themes = (Get-Content -LiteralPath (Join-Path $root 'prototype\themes.json') -Raw -Encoding UTF8 | ConvertFrom-Json).themes
 $ready = @($themes | Where-Object { $_.status -eq 'ready' })
 $locked = @($themes | Where-Object { $_.locked -eq $true })
-if ($themes.Count -ne 20 -or $ready.Count -ne 9 -or $locked.Count -ne 11 -or (($ready.id | Sort-Object) -join ',' -ne 'ast,beach,dashboard,desk,gitgraph,ide,meadow,space,terminal')) {
-    throw 'Expected nine usable themes and eleven locked preview cards'
+if ($themes.Count -ne 9 -or $ready.Count -ne 9 -or $locked.Count -ne 0 -or (($ready.id | Sort-Object) -join ',' -ne 'ast,beach,dashboard,desk,gitgraph,ide,meadow,space,terminal')) {
+    throw 'Expected nine usable themes and no locked preview cards'
 }
 foreach ($theme in $locked) {
     if ($theme.page -or $theme.groups) { throw 'Locked themes must not contain page source or settings' }
