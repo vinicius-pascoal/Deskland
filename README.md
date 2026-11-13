@@ -42,7 +42,7 @@ The theme browser also shows 11 locked themes as a preview of the full Wallpaper
 - An internet connection for the first build, which downloads the WebView2 development library.
 - Node.js only if you want to run the browser preview.
 
-Currently, Deskland renders on the **primary monitor** and targets 30 fps on integrated graphics.
+Deskland renders on **every connected monitor**, each with its own scenery shaped around that monitor's icons, and targets 30 fps on integrated graphics.
 
 ## Build from source
 
@@ -100,7 +100,7 @@ The installer targets the current user's `Programs\Deskland Preview` directory a
 
 ## Known limitations
 
-- Only the primary monitor is supported.
+- With multiple monitors, the settings preview and sharing use the primary monitor. Monitors with different display scaling share the primary monitor's scale for drawing details.
 - Windows Spotlight or a wallpaper slideshow can briefly flash when Windows changes the background image.
 - Preview does not include account sign-in, entitlement restoration, automatic updates or the other themes' implementation.
 
@@ -152,7 +152,7 @@ Deskland 是一款 Windows 自适应动态壁纸。移动、添加或删除桌�
 - 第一次构建需要联网下载 WebView2 开发库。
 - 仅浏览器预览需要 Node.js。
 
-目前只覆盖**主显示器**，以核显 30fps 为目标。
+覆盖**所有显示器**，每个显示器按自己的图标生成风景，以核显 30fps 为目标。
 
 ### 从源码运行
 
@@ -208,7 +208,7 @@ powershell -ExecutionPolicy Bypass -File tools\build-installer.ps1
 
 ### 已知限制
 
-- 目前只支持主显示器。
+- 多显示器时，设置页预览和分享使用主显示器；缩放比例不同的显示器按主显示器的比例绘制细节。
 - 使用 Windows 聚焦或壁纸幻灯片时，系统换图可能造成短暂闪烁。
 - 体验版不包含账号登录、购买恢复、自动更新或其他主题实现。
 
