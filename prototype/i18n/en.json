@@ -780,6 +780,93 @@
           "unit": ""
         }
       }
+    },
+    "ast": {
+      "name": "Syntax Tree",
+      "desc": "Your icons become nodes of an abstract syntax tree branching downward; a parser lights them up in order, and several monitors hang under one Program",
+      "groups": [
+        "Look",
+        "Parsing"
+      ],
+      "params": {
+        "palette": {
+          "label": "Colors",
+          "hint": "Paper, dark slate or blueprint",
+          "options": [
+            "Paper",
+            "Slate",
+            "Blueprint"
+          ]
+        },
+        "density": {
+          "label": "Branch density",
+          "hint": "How many small nodes grow in open space"
+        },
+        "values": {
+          "label": "Names and values",
+          "hint": "Show names and values on Identifier and Literal nodes",
+          "options": [
+            "Hide",
+            "Show"
+          ]
+        },
+        "speed": {
+          "label": "Parse speed",
+          "hint": "How fast the parser lights up nodes"
+        },
+        "strip": {
+          "label": "Source strip",
+          "hint": "The line of tokens at the bottom, highlighted in step with the parser",
+          "options": [
+            "Hide",
+            "Show"
+          ]
+        }
+      }
+    },
+    "dashboard": {
+      "name": "System Dashboard",
+      "desc": "This PC's live CPU, per-core heatmap, memory, network and disk fill the open space; icon alerts turn from green to yellow to red as load rises",
+      "groups": [
+        "Panels",
+        "Alerts"
+      ],
+      "params": {
+        "palette": {
+          "label": "Colors",
+          "hint": "Dark or light panels",
+          "options": [
+            "Dark",
+            "Light"
+          ]
+        },
+        "range": {
+          "label": "Time range",
+          "hint": "How much recent history the charts and heatmap show",
+          "options": [
+            "1 minute",
+            "5 minutes",
+            "15 minutes"
+          ]
+        },
+        "refresh": {
+          "label": "Refresh",
+          "hint": "How often the panels redraw; longer saves power",
+          "options": [
+            "1 second",
+            "2 seconds",
+            "5 seconds"
+          ]
+        },
+        "alerts": {
+          "label": "Icon alerts",
+          "hint": "Icon borders turn from green to yellow to red with CPU and memory load",
+          "options": [
+            "Off",
+            "On"
+          ]
+        }
+      }
     }
   }
 }

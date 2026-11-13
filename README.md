@@ -96,6 +96,8 @@ The installer targets the current user's `Programs\Deskland Preview` directory a
 | `prototype/ide.html` | Code Editor theme (one file spread across all monitors) |
 | `prototype/terminal.html` | Retro Terminal theme |
 | `prototype/gitgraph.html` | Git Graph theme (main runs across all monitors) |
+| `prototype/ast.html` | Syntax Tree theme (one Program across all monitors) |
+| `prototype/dashboard.html` | System Dashboard theme (live CPU, memory, network and disk of this PC, sampled locally by the host) |
 | `prototype/settings.html` | Settings interface |
 | `prototype/themes.json` | Full free-theme definitions and locked-theme display metadata |
 | `prototype/share.js` | Privacy-preserving image and animation sharing |
@@ -208,6 +210,8 @@ powershell -ExecutionPolicy Bypass -File tools\build-installer.ps1
 | `prototype/ide.html` | 代码编辑器主题（多个显示器连成同一个文件） |
 | `prototype/terminal.html` | 复古终端主题 |
 | `prototype/gitgraph.html` | Git 分支图主题（main 横穿所有显示器） |
+| `prototype/ast.html` | 语法树主题（多个显示器挂在同一个 Program 下） |
+| `prototype/dashboard.html` | 监控仪表盘主题（宿主在本机采样的实时 CPU、内存、网络、磁盘） |
 | `prototype/settings.html` | 设置界面 |
 | `prototype/themes.json` | 免费主题完整定义及锁定主题展示信息 |
 | `prototype/share.js` | 隐私保护的图片和动画分享 |

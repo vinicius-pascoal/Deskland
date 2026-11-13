@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deskland · 监控仪表盘（原型）</title>
+<!--
+  Deskland · 监控仪表盘主题（可观测性面板；Canvas 2D）
+  - 空地上铺满面板：CPU 曲线、每个核心的热力图、内存仪表、网络吞吐、系统盘、开机时长、进程数、电池……
+  - 数据是这台电脑的真实数字：宿主每秒采样一次（只有数字，不含机器名、用户名、进程名，不外发）；
+    在浏览器或设置预览里打开时没有宿主，用编出来的演示数据，顶栏标"demo data"
+  - 图标是告警：负载越高，越多图标从绿色（正常）变黄（待定）再变红（触发），边框轻轻呼吸
+  性能：面板按刷新间隔整张重画到缓冲画布（默认 1 秒一次）；每帧只贴这张图，再画图标边框的呼吸
+-->
+<style>
+  :root { --taskbar: 48px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #111217; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif; }
+  #art { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #desktop { position: fixed; left: 0; top: 0; right: 0; bottom: var(--taskbar); }
+  .icon {
+    position: absolute; width: 76px; padding: 4px 2px 5px;
+    display: flex; flex-direction: column; align-items: center;
+    border: 1px solid transparent; border-radius: 4px;
+    user-select: none; touch-action: none; cursor: default;
+  }
+  .icon:hover { background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.2); }
+  .icon.drag { opacity: .88; z-index: 10; transform: scale(1.04); }
+  .icon.settle { transition: left .22s cubic-bezier(.2,.8,.3,1), top .22s cubic-bezier(.2,.8,.3,1); }
+  .glyph { width: 48px; height: 48px; border-radius: 10px; display: grid; place-items: center; color: #fff;
+    font-size: 21px; font-weight: 700; box-shadow: 0 2px 6px rgba(0,0,0,.35); pointer-events: none; }
+  .label {
+    margin-top: 3px; max-width: 72px; font-size: 12px; line-height: 15px; color: #fff; text-align: center;
+    text-shadow: 0 0 2px rgba(0,0,0,.95), 0 1px 3px rgba(0,0,0,.85);
+    word-break: break-all; overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; pointer-events: none;
+  }
+  #taskbar {
+    position: fixed; left: 0; right: 0; bottom: 0; height: var(--taskbar);
+    background: rgba(20,22,30,.62); backdrop-filter: blur(28px) saturate(1.6); -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    border-top: 1px solid rgba(255,255,255,.08); z-index: 40;
+  }
+  #hint {
+    position: fixed; top: 54px; right: 20px; padding: 10px 14px; border-radius: 10px; z-index: 50;
+    background: rgba(11,12,14,.88); color: #ccccdc; font-size: 12px; line-height: 1.6;
+    border: 1px solid rgba(255,255,255,.14);
+  }
+  #hint.hidden { display: none; }
+  body.wall #desktop, body.wall #taskbar, body.wall #hint { display: none; }
+  #ghosts { position: fixed; inset: 0; pointer-events: none; display: none; }
+  body.preview #ghosts { display: block; }
+  .ghost { position: absolute; }
+  .ghost i { position: absolute; left: 50%; top: 4px; width: 48px; height: 48px; margin-left: -24px; border-radius: 9px;
+    background: rgba(255,255,255,.88); box-shadow: 3px 6px 8px rgba(0,0,0,.35); }
+  .ghost b { position: absolute; left: 14%; right: 14%; top: 60px; height: 10px; border-radius: 5px; background: rgba(255,255,255,.75); }
+</style>
+</head>
+<body>
+<canvas id="art"></canvas>
+<div id="desktop"></div>
+<div id="taskbar"></div>
+<div id="hint"><b>Deskland · 监控仪表盘</b><br>浏览器里是演示数据；壁纸里是这台电脑的真实数据<br>拖动图标，面板会重新排 · P 换配色 · L 加大负载 · H 隐藏提示</div>
+
+<script>
+'use strict';
+
+/* ======================================================================
+   参数（默认值和 themes.json 里监控仪表盘主题的 default 保持一致）
+   ====================================================================== */
+const CELL_W = 76, CELL_H = 100, GRID_X0 = 4, GRID_Y0 = 6, TASKBAR = 48;
+const COLS = 24, MARGIN = 8, GUT = 8, ROW_H = 34, HEAD_H = 40, MORPH_MS = 500;
+
+const QS = new URLSearchParams(location.search);
+const WALL = QS.has('wallpaper');
+const PREVIEW = QS.has('preview');
+const P = { palette: 0, range: 1, refresh: 0, alerts: 1 };
+const DEFAULTS = Object.assign({}, P);
+const LIMITS = { palette: [0, 1], range: [0, 2], refresh: [0, 2], alerts: [0, 1] };
+const RANGES = [60, 300, 900], RANGE_TXT = ['Last 1 minute', 'Last 5 minutes', 'Last 15 minutes'], REFRESH = [1, 2, 5];
+
+const cv = document.getElementById('art');
+const ctx = cv.getContext('2d', { alpha: false });
+let W = innerWidth, H = innerHeight;
+let icons = [];
+let seed = QS.has('seed') ? (+QS.get('seed') | 0) : 20261113;
+let MON = { x: 0, y: 0 }, SCREENS = null;
+
+function hash2(x, y, k) {
+  let h = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ Math.imul((seed + k) | 0, 2246822519);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function mulberry32(a) {
+  return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+
+/* ======================================================================
+   配色（深色 / 浅色）和状态颜色
+   ====================================================================== */
+const PALS = [
+  { bg: '#111217', head: '#0b0c0e', panel: '#181b1f', border: '#262a30', title: '#ccccdc', text: '#9fa7b3', grid: 'rgba(204,204,220,0.08)', track: '#22252b' },
+  { bg: '#f4f5f5', head: '#ffffff', panel: '#ffffff', border: '#dcdee1', title: '#24292e', text: '#6e7781', grid: 'rgba(36,41,46,0.08)', track: '#e9ebee' },
+];
+const C = { green: '#73bf69', yellow: '#fade2a', orange: '#ff9830', red: '#f2495c', blue: '#5794f2', purple: '#b877d9', cyan: '#8ab8ff' };
+const levelColor = (v, warn = 70, crit = 85) => v >= crit ? C.red : v >= warn ? C.orange : C.green;
+const UI = '"Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif';
+
+/* ======================================================================
+   数据：真实数据来自宿主（stats / statsHist）；没有宿主时用演示数据
+   ====================================================================== */
+const HIST = 900;
+const D = { cpu: [], mem: [], rx: [], tx: [], cores: [], last: {}, real: false, n: 0, rxTotal: 0 };
+let dataDirty = true;
+function pushSample(s) {
+  for (const k of ['cpu', 'mem', 'rx', 'tx']) D[k].push(typeof s[k] === 'number' ? s[k] : null);
+  D.cores.push(Array.isArray(s.cores) ? s.cores : null);
+  for (const k of ['cpu', 'mem', 'rx', 'tx', 'cores']) if (D[k].length > HIST) D[k].splice(0, D[k].length - HIST);
+  for (const k in s) if (s[k] !== null && s[k] !== undefined && k !== 't') D.last[k] = s[k];
+  if (typeof s.rx === 'number') D.rxTotal += s.rx;
+  D.n++;
+  dataDirty = true;
+}
+function resetData() { D.cpu = []; D.mem = []; D.rx = []; D.tx = []; D.cores = []; D.last = {}; D.n = 0; D.rxTotal = 0; }
+// 演示数据：平滑起伏 + 偶尔的尖峰；L 键可以加大负载，看看图标告警变红
+const demo = { rng: mulberry32(seed ^ 0xd30), t: 0, mem: 58, boost: 0 };
+function demoSample() {
+  const r = demo.rng, t = ++demo.t;
+  const base = 18 + 14 * Math.sin(t / 23) + 8 * Math.sin(t / 7.3) + (r() < 0.05 ? 40 * r() : 0) + demo.boost;
+  const cores = [];
+  for (let i = 0; i < 8; i++) cores.push(+clamp(base + (r() - 0.5) * 30 + (i === Math.floor(t / 9) % 8 ? 30 : 0), 0, 100).toFixed(1));
+  demo.mem = clamp(demo.mem + (r() - 0.5) * 0.9 + demo.boost * 0.01, 42, 97);
+  const total = 16 * 2 ** 30;
+  return { cpu: cores.reduce((a, b) => a + b, 0) / 8, cores, mem: demo.mem, memTotal: total, memUsed: total * demo.mem / 100,
+    rx: Math.max(0, 30000 + 900000 * Math.max(0, Math.sin(t / 11)) * r()), tx: 6000 + 60000 * r(),
+    diskTotal: 512 * 2 ** 30, diskUsed: 0.61 * 512 * 2 ** 30, procs: 270 + Math.round(10 * Math.sin(t / 40)), up: 93784 + t, bat: -1 };
+}
+function fillDemo() { resetData(); for (let i = 0; i < HIST; i++) pushSample(demoSample()); }
+
+/* ---------- 格式化 ---------- */
+function fmtBytes(b, rate) {
+  const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0;
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  return (b >= 100 || i === 0 ? b.toFixed(0) : b.toFixed(1)) + ' ' + u[i] + (rate ? '/s' : '');
+}
+function fmtUp(s) {
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+}
+const pct = v => typeof v === 'number' ? v.toFixed(v < 10 ? 1 : 0) + '%' : '—';
+function niceMax(v) {
+  if (v <= 0) return 1;
+  const p = Math.pow(10, Math.floor(Math.log10(v))), f = v / p;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p;
+}
+function niceBytesMax(v) { const k = Math.max(10 * 1024, v * 1.15); let u = 1; while (k / u >= 1024) u *= 1024; return niceMax(k / u) * u; }
+
+/* ======================================================================
+   面板布局：24 列的网格，避开图标，按优先级从左上往右下放
+   ====================================================================== */
+const SPECS = [
+  { id: 'cpu-ts', title: 'CPU usage', w: 8, h: 7, mw: 5, mh: 5 },
+  { id: 'mem-gauge', title: 'Memory', w: 4, h: 6, mw: 3, mh: 4 },
+  { id: 'cores', title: 'CPU cores', w: 8, h: 6, mw: 5, mh: 4 },
+  { id: 'net-ts', title: 'Network', w: 8, h: 6, mw: 5, mh: 4 },
+  { id: 'stat-cpu', title: 'CPU now', w: 4, h: 3, mw: 3, mh: 3 },
+  { id: 'stat-mem', title: 'RAM used', w: 4, h: 3, mw: 3, mh: 3 },
+  { id: 'stat-up', title: 'Uptime', w: 4, h: 3, mw: 3, mh: 3 },
+  { id: 'stat-proc', title: 'Processes', w: 4, h: 3, mw: 3, mh: 3 },
+  { id: 'disk', title: 'Resources', w: 6, h: 4, mw: 4, mh: 3 },
+  { id: 'alerts', title: 'Alert rules', w: 6, h: 6, mw: 4, mh: 4 },
+  { id: 'mem-ts', title: 'Memory usage', w: 8, h: 6, mw: 5, mh: 4 },
+  { id: 'stat-bat', title: 'Battery', w: 4, h: 3, mw: 3, mh: 3, needs: 'bat' },
+  { id: 'cpu-gauge', title: 'CPU load', w: 4, h: 6, mw: 3, mh: 4 },
+  { id: 'stat-rx', title: 'Download', w: 4, h: 3, mw: 3, mh: 3 },
+  { id: 'stat-tx', title: 'Upload', w: 4, h: 3, mw: 3, mh: 3 },
+  { id: 'stat-peak', title: 'CPU peak', w: 4, h: 3, mw: 3, mh: 3 },
+  { id: 'stat-cores', title: 'Logical cores', w: 4, h: 3, mw: 3, mh: 3 },
+  { id: 'stat-recv', title: 'Received', w: 4, h: 3, mw: 3, mh: 3 },
+  { id: 'stat-clock', title: 'Local time', w: 4, h: 3, mw: 3, mh: 3 },
+];
+let panels = [], gridInfo = null, layoutKey = '';
+function layout() {
+  const colW = (W - 2 * MARGIN + GUT) / COLS, top = HEAD_H + 6, rows = Math.max(1, Math.floor((H - TASKBAR - top - MARGIN + GUT) / ROW_H));
+  const occ = new Uint8Array(COLS * rows);
+  const cellRect = (c, r) => ({ x: MARGIN + c * colW, y: top + r * ROW_H, w: colW, h: ROW_H });
+  for (const ic of icons) for (let r = 0; r < rows; r++) for (let c = 0; c < COLS; c++) {
+    const q = cellRect(c, r);
+    if (ic.x - 6 < q.x + q.w - GUT && ic.x + ic.w + 6 > q.x && ic.y - 6 < q.y + q.h - GUT && ic.y + ic.h + 6 > q.y) occ[r * COLS + c] = 1;
+  }
+  const fits = (c, r, w, h) => {
+    if (c + w > COLS || r + h > rows) return false;
+    for (let y = r; y < r + h; y++) for (let x = c; x < c + w; x++) if (occ[y * COLS + x]) return false;
+    return true;
+  };
+  panels = [];
+  for (const sp of SPECS) {
+    if (sp.needs && !(typeof D.last[sp.needs] === 'number' && D.last[sp.needs] >= 0)) continue;
+    let placed = null;
+    for (let w = sp.w; w >= sp.mw && !placed; w--) for (let h = sp.h; h >= sp.mh && !placed; h--)
+      for (let r = 0; r < rows && !placed; r++) for (let c = 0; c < COLS && !placed; c++) if (fits(c, r, w, h)) placed = { c, r, w, h };
+    if (!placed) continue;
+    for (let y = placed.r; y < placed.r + placed.h; y++) for (let x = placed.c; x < placed.c + placed.w; x++) occ[y * COLS + x] = 1;
+    panels.push(Object.assign({ sp }, placed));
+  }
+  // 放完以后：右边 / 下面还有放不下新面板的零碎空格，让相邻的面板长过去填满
+  const freeCol = (c, r0, h) => { if (c >= COLS) return false; for (let y = r0; y < r0 + h; y++) if (occ[y * COLS + c]) return false; return true; };
+  const freeRow = (r, c0, w) => { if (r >= rows) return false; for (let x = c0; x < c0 + w; x++) if (occ[r * COLS + x]) return false; return true; };
+  for (let pass = 0; pass < 3; pass++) for (const p of panels) {
+    while (p.w < p.sp.w + 6 && freeCol(p.c + p.w, p.r, p.h)) { for (let y = p.r; y < p.r + p.h; y++) occ[y * COLS + p.c + p.w] = 1; p.w++; }
+    while (p.h < p.sp.h + 3 && freeRow(p.r + p.h, p.c, p.w)) { for (let x = p.c; x < p.c + p.w; x++) occ[(p.r + p.h) * COLS + x] = 1; p.h++; }
+  }
+  for (const p of panels) { p.x = MARGIN + p.c * colW; p.y = top + p.r * ROW_H; p.pw = p.w; p.w = p.w * colW - GUT; p.h = p.h * ROW_H - GUT; }
+  layoutKey = `${W}x${H}|${icons.map(i => (i.x | 0) + ',' + (i.y | 0)).join(';')}|${'bat' in D.last && D.last.bat >= 0}`;
+}
+
+/* ======================================================================
+   面板绘制
+   ====================================================================== */
+function frameOf(c, p, pal) {
+  c.fillStyle = pal.panel; c.strokeStyle = pal.border; c.lineWidth = 1;
+  c.beginPath(); c.roundRect(p.x + 0.5, p.y + 0.5, p.w - 1, p.h - 1, 4); c.fill(); c.stroke();
+  c.fillStyle = pal.title; c.font = `600 12.5px ${UI}`; c.textBaseline = 'middle'; c.textAlign = 'left';
+  c.fillText(p.sp.title, p.x + 10, p.y + 16);
+  return { x: p.x + 10, y: p.y + 30, w: p.w - 20, h: p.h - 38 };
+}
+const lastN = (arr, n) => arr.length > n ? arr.slice(arr.length - n) : arr;
+function timeseries(c, a, pal, series, opt) {
+  const N = RANGES[P.range], legendH = 16, axisW = 46, bottomH = 14;
+  const plot = { x: a.x + axisW, y: a.y + 4, w: a.w - axisW, h: a.h - legendH - bottomH - 4 };
+  if (plot.h < 20 || plot.w < 40) return;
+  let max = opt.max;
+  if (!max) { let m = 0; for (const s of series) for (const v of lastN(s.data, N)) if (v > m) m = v; max = opt.bytes ? niceBytesMax(m) : niceMax(m * 1.15); }
+  c.font = `11px ${UI}`; c.textBaseline = 'middle'; c.textAlign = 'right';
+  for (let i = 0; i <= 4; i++) {
+    const y = plot.y + plot.h - plot.h * i / 4;
+    c.fillStyle = pal.grid; c.fillRect(plot.x, Math.round(y) + 0.5, plot.w, 1);
+    c.fillStyle = pal.text; const v = max * i / 4;
+    c.fillText(opt.bytes ? fmtBytes(v, true) : opt.unit === '%' ? v.toFixed(0) + '%' : v.toFixed(0), plot.x - 6, y);
+  }
+  c.textAlign = 'center'; c.textBaseline = 'top';
+  const span = N >= 900 ? ['-15m', '-10m', '-5m', 'now'] : N >= 300 ? ['-5m', '-3m20s', '-1m40s', 'now'] : ['-60s', '-40s', '-20s', 'now'];
+  span.forEach((t, i) => c.fillText(t, plot.x + plot.w * i / 3, plot.y + plot.h + 3));
+  for (const s of series) {
+    const d = lastN(s.data, N), off = N - d.length, xOf = i => plot.x + plot.w * (i + off) / (N - 1), yOf = v => plot.y + plot.h - plot.h * clamp(v / max, 0, 1);
+    const segs = []; let seg = [];
+    d.forEach((v, i) => { if (v === null) { if (seg.length) segs.push(seg); seg = []; } else seg.push([xOf(i), yOf(v)]); });
+    if (seg.length) segs.push(seg);
+    for (const sg of segs) {
+      if (sg.length < 2) continue;
+      const g = c.createLinearGradient(0, plot.y, 0, plot.y + plot.h);
+      g.addColorStop(0, s.color + '55'); g.addColorStop(1, s.color + '00');
+      c.beginPath(); c.moveTo(sg[0][0], plot.y + plot.h); for (const [x, y] of sg) c.lineTo(x, y); c.lineTo(sg[sg.length - 1][0], plot.y + plot.h); c.closePath();
+      c.fillStyle = g; c.fill();
+      c.beginPath(); sg.forEach(([x, y], i) => i ? c.lineTo(x, y) : c.moveTo(x, y));
+      c.strokeStyle = s.color; c.lineWidth = 1.6; c.lineJoin = 'round'; c.stroke();
+    }
+  }
+  // 图例
+  c.textAlign = 'left'; c.textBaseline = 'middle'; c.font = `11.5px ${UI}`;
+  let lx = a.x;
+  const ly = a.y + a.h - legendH / 2;
+  for (const s of series) {
+    const last = [...s.data].reverse().find(v => v !== null);
+    const t = `${s.name}  ${last === undefined ? '—' : opt.bytes ? fmtBytes(last, true) : last.toFixed(1) + (opt.unit || '')}`;
+    c.fillStyle = s.color; c.fillRect(lx, ly - 2, 12, 4);
+    c.fillStyle = pal.text; c.fillText(t, lx + 18, ly);
+    lx += c.measureText(t).width + 34;
+  }
+}
+function gauge(c, a, pal, v, sub) {
+  const r = Math.max(10, Math.min(a.w / 2, a.h * 0.62) - 6), cx = a.x + a.w / 2, cy = a.y + a.h * 0.55 + r * 0.15;
+  const a0 = Math.PI * 0.8, a1 = Math.PI * 2.2, lw = Math.max(6, r * 0.18);
+  c.lineCap = 'butt';
+  c.strokeStyle = pal.track; c.lineWidth = lw; c.beginPath(); c.arc(cx, cy, r, a0, a1); c.stroke();
+  // 阈值标记（细的一圈）
+  for (const [from, to, col] of [[0, 70, C.green], [70, 85, C.orange], [85, 100, C.red]]) {
+    c.strokeStyle = col; c.globalAlpha = 0.5; c.lineWidth = 2;
+    c.beginPath(); c.arc(cx, cy, r + lw / 2 + 3, a0 + (a1 - a0) * from / 100, a0 + (a1 - a0) * to / 100); c.stroke();
+  }
+  c.globalAlpha = 1;
+  if (typeof v === 'number') { c.strokeStyle = levelColor(v); c.lineWidth = lw; c.beginPath(); c.arc(cx, cy, r, a0, a0 + (a1 - a0) * clamp(v / 100, 0, 1)); c.stroke(); }
+  c.fillStyle = typeof v === 'number' ? levelColor(v) : pal.text; c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.font = `500 ${Math.round(clamp(r * 0.5, 14, 40))}px ${UI}`; c.fillText(pct(v), cx, cy);
+  if (sub) { c.fillStyle = pal.text; c.font = `11.5px ${UI}`; c.fillText(sub, cx, Math.min(a.y + a.h - 6, cy + r * 0.62)); }
+}
+function stat(c, a, pal, text, color, spark, sparkMax) {
+  if (spark && spark.length > 2) {
+    const d = lastN(spark, RANGES[P.range]).map(v => v === null ? 0 : v), max = sparkMax || Math.max(1, ...d) * 1.1, h = a.h * 0.55;
+    c.beginPath(); c.moveTo(a.x, a.y + a.h);
+    d.forEach((v, i) => c.lineTo(a.x + a.w * i / (d.length - 1), a.y + a.h - h * clamp(v / max, 0, 1)));
+    c.lineTo(a.x + a.w, a.y + a.h); c.closePath();
+    c.fillStyle = color + '2a'; c.fill();
+  }
+  c.fillStyle = color; c.textAlign = 'left'; c.textBaseline = 'middle';
+  let size = Math.round(clamp(a.h * 0.62, 14, 34));
+  c.font = `500 ${size}px ${UI}`;
+  while (size > 12 && c.measureText(text).width > a.w) { size -= 2; c.font = `500 ${size}px ${UI}`; }
+  c.fillText(text, a.x, a.y + a.h * 0.42);
+}
+function heatColor(v) {
+  const t = clamp(v / 100, 0, 1), stops = [[0, [24, 40, 72]], [0.35, [55, 120, 210]], [0.65, [250, 222, 42]], [0.85, [255, 152, 48]], [1, [242, 73, 92]]];
+  for (let i = 1; i < stops.length; i++) if (t <= stops[i][0]) {
+    const [t0, c0] = stops[i - 1], [t1, c1] = stops[i], k = (t - t0) / (t1 - t0);
+    return `rgb(${c0.map((x, j) => Math.round(x + (c1[j] - x) * k)).join(',')})`;
+  }
+  return 'rgb(242,73,92)';
+}
+function heatmap(c, a, pal) {
+  const hist = D.cores.filter(Boolean), nCores = hist.length ? hist[hist.length - 1].length : 0;
+  if (!nCores) { c.fillStyle = pal.text; c.font = `12px ${UI}`; c.textAlign = 'center'; c.fillText('waiting for data…', a.x + a.w / 2, a.y + a.h / 2); return; }
+  const lab = 30, plotW = a.w - lab, cols = Math.max(4, Math.min(RANGES[P.range], Math.floor(plotW / 4))), d = lastN(hist, cols);
+  const cw = plotW / cols, ch = a.h / nCores;
+  for (let j = 0; j < d.length; j++) for (let i = 0; i < nCores; i++) {
+    c.fillStyle = heatColor(d[j][i] || 0);
+    c.fillRect(a.x + lab + (cols - d.length + j) * cw, a.y + i * ch, Math.ceil(cw) - (cw > 5 ? 1 : 0), Math.ceil(ch) - (ch > 6 ? 1 : 0));
+  }
+  if (ch >= 10) { c.fillStyle = pal.text; c.font = `10.5px ${UI}`; c.textAlign = 'left'; c.textBaseline = 'middle'; for (let i = 0; i < nCores; i++) c.fillText('c' + i, a.x, a.y + i * ch + ch / 2); }
+}
+function bars(c, a, pal, items) {
+  const rh = Math.min(30, a.h / items.length);
+  items.forEach((it, i) => {
+    const y = a.y + i * rh, bx = a.x + 64, bw = a.w - 64 - 58, v = clamp(it.v, 0, 100);
+    c.fillStyle = pal.text; c.font = `11.5px ${UI}`; c.textAlign = 'left'; c.textBaseline = 'middle'; c.fillText(it.label, a.x, y + rh / 2);
+    c.fillStyle = pal.track; c.fillRect(bx, y + rh * 0.25, bw, rh * 0.5);
+    const g = c.createLinearGradient(bx, 0, bx + bw, 0); g.addColorStop(0, C.green); g.addColorStop(0.7, C.orange); g.addColorStop(1, C.red);
+    c.save(); c.beginPath(); c.rect(bx, y + rh * 0.25, bw * v / 100, rh * 0.5); c.clip(); c.fillStyle = g; c.fillRect(bx, y + rh * 0.25, bw, rh * 0.5); c.restore();
+    c.fillStyle = levelColor(v); c.textAlign = 'right'; c.fillText(it.text, a.x + a.w, y + rh / 2);
+  });
+}
+function alertRules(c, a, pal) {
+  const L = D.last, cpu = L.cpu, mem = L.mem, disk = L.diskTotal ? 100 * L.diskUsed / L.diskTotal : null;
+  const peak = Math.max(0, ...lastN(D.cpu, 60).filter(v => v !== null));
+  const rules = [
+    ['CPU usage > 85%', cpu >= 85 ? 2 : cpu >= 70 ? 1 : 0],
+    ['Memory > 90%', mem >= 90 ? 2 : mem >= 80 ? 1 : 0],
+    ['System disk > 90%', disk >= 90 ? 2 : disk >= 80 ? 1 : 0],
+    ['CPU spike (1m peak > 95%)', peak >= 95 ? 2 : peak >= 85 ? 1 : 0],
+    [`Desktop icons watched: ${icons.length}`, icons.filter((ic, i) => iconState(i) === 2).length ? 2 : 0],
+  ];
+  if (typeof L.bat === 'number' && L.bat >= 0) rules.push([`Battery < 15%${L.ac ? ' (charging)' : ''}`, L.bat < 15 && !L.ac ? 2 : L.bat < 30 && !L.ac ? 1 : 0]);
+  const rh = Math.min(26, a.h / rules.length);
+  rules.forEach(([name, st], i) => {
+    const y = a.y + i * rh + rh / 2, col = [C.green, C.yellow, C.red][st];
+    c.fillStyle = col; c.beginPath(); c.arc(a.x + 5, y, 4, 0, 6.2832); c.fill();
+    c.fillStyle = pal.title; c.font = `12px ${UI}`; c.textAlign = 'left'; c.textBaseline = 'middle'; c.fillText(name, a.x + 16, y);
+    c.fillStyle = col; c.font = `600 11px ${UI}`; c.textAlign = 'right'; c.fillText(['Normal', 'Pending', 'Firing'][st], a.x + a.w, y);
+  });
+}
+function drawPanel(c, p, pal) {
+  const a = frameOf(c, p, pal), L = D.last;
+  c.save(); c.beginPath(); c.rect(p.x, p.y, p.w, p.h); c.clip();
+  switch (p.sp.id) {
+    case 'cpu-ts': timeseries(c, a, pal, [{ name: 'CPU', data: D.cpu, color: C.green }], { max: 100, unit: '%' }); break;
+    case 'mem-ts': timeseries(c, a, pal, [{ name: 'Used', data: D.mem, color: C.purple }], { max: 100, unit: '%' }); break;
+    case 'net-ts': timeseries(c, a, pal, [{ name: 'Down', data: D.rx, color: C.blue }, { name: 'Up', data: D.tx, color: C.yellow }], { bytes: true }); break;
+    case 'mem-gauge': gauge(c, a, pal, L.mem, L.memTotal ? `${fmtBytes(L.memUsed)} / ${fmtBytes(L.memTotal)}` : ''); break;
+    case 'cpu-gauge': gauge(c, a, pal, L.cpu, L.cores ? `${L.cores.length} cores` : ''); break;
+    case 'cores': heatmap(c, a, pal); break;
+    case 'stat-cpu': stat(c, a, pal, pct(L.cpu), typeof L.cpu === 'number' ? levelColor(L.cpu) : pal.text, D.cpu, 100); break;
+    case 'stat-mem': stat(c, a, pal, L.memUsed ? fmtBytes(L.memUsed) : '—', typeof L.mem === 'number' ? levelColor(L.mem, 80, 90) : pal.text, D.mem, 100); break;
+    case 'stat-up': stat(c, a, pal, typeof L.up === 'number' ? fmtUp(L.up) : '—', C.cyan); break;
+    case 'stat-proc': stat(c, a, pal, typeof L.procs === 'number' ? String(L.procs) : '—', C.blue); break;
+    case 'stat-rx': stat(c, a, pal, typeof L.rx === 'number' ? fmtBytes(L.rx, true) : '—', C.blue, D.rx); break;
+    case 'stat-tx': stat(c, a, pal, typeof L.tx === 'number' ? fmtBytes(L.tx, true) : '—', C.yellow, D.tx); break;
+    case 'stat-bat': stat(c, a, pal, typeof L.bat === 'number' ? `${L.bat}%${L.ac ? ' ⚡' : ''}` : '—', L.bat < 20 && !L.ac ? C.red : C.green); break;
+    case 'stat-peak': { const pk = Math.max(0, ...lastN(D.cpu, RANGES[P.range]).filter(v => v !== null)); stat(c, a, pal, pct(pk), levelColor(pk)); break; }
+    case 'stat-cores': stat(c, a, pal, L.cores ? String(L.cores.length) : '—', C.purple); break;
+    case 'stat-recv': stat(c, a, pal, fmtBytes(D.rxTotal), C.blue); break;
+    case 'stat-clock': { const d = new Date(); stat(c, a, pal, `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`, pal.title); break; }
+    case 'disk': {
+      const items = [];
+      if (L.diskTotal) items.push({ label: 'Disk', v: 100 * L.diskUsed / L.diskTotal, text: `${fmtBytes(L.diskTotal - L.diskUsed)} free` });
+      if (typeof L.mem === 'number') items.push({ label: 'Memory', v: L.mem, text: pct(L.mem) });
+      if (typeof L.cpu === 'number') items.push({ label: 'CPU', v: L.cpu, text: pct(L.cpu) });
+      if (items.length) bars(c, a, pal, items);
+      break;
+    }
+    case 'alerts': alertRules(c, a, pal); break;
+  }
+  c.restore();
+}
+function drawHeader(c, pal) {
+  c.fillStyle = pal.head; c.fillRect(0, 0, W, HEAD_H);
+  c.fillStyle = pal.border; c.fillRect(0, HEAD_H - 1, W, 1);
+  // 图标都在左上角时，标题往右让一让
+  let x = 14;
+  for (const ic of icons) if (ic.y < HEAD_H && ic.x < 420) x = Math.max(x, ic.x + ic.w + 14);
+  c.textBaseline = 'middle'; c.textAlign = 'left';
+  c.fillStyle = C.orange; for (let i = 0; i < 4; i++) c.fillRect(x + (i % 2) * 7, HEAD_H / 2 - 7 + Math.floor(i / 2) * 7, 5, 5);
+  c.fillStyle = pal.text; c.font = `13px ${UI}`; c.fillText('Deskland  /', x + 22, HEAD_H / 2);
+  c.fillStyle = pal.title; c.font = `600 13px ${UI}`; c.fillText('System overview', x + 22 + c.measureText('Deskland  / ').width + 4, HEAD_H / 2);
+  const d = new Date(), right = [`${RANGE_TXT[P.range]}`, `⟳ ${REFRESH[P.refresh]}s`, `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`];
+  if (!D.real) right.unshift('demo data');
+  c.font = `12px ${UI}`; c.textAlign = 'right';
+  let rx = W - 14;
+  for (let i = right.length - 1; i >= 0; i--) {
+    const t = right[i], tw = c.measureText(t).width + 18, demoTag = !D.real && i === 0;
+    c.strokeStyle = demoTag ? C.orange : pal.border; c.fillStyle = demoTag ? 'rgba(255,152,48,0.12)' : 'rgba(0,0,0,0)';
+    c.beginPath(); c.roundRect(rx - tw, HEAD_H / 2 - 12, tw, 24, 4); c.fill(); c.stroke();
+    c.fillStyle = demoTag ? C.orange : pal.text; c.fillText(t, rx - 9, HEAD_H / 2 + 0.5);
+    rx -= tw + 8;
+  }
+}
+
+/* ======================================================================
+   缓冲画布：按刷新间隔整张重画；布局变化时新旧交叉淡入
+   ====================================================================== */
+const B = [document.createElement('canvas'), document.createElement('canvas')];
+let bcur = 0, bold = -1, bT0 = 0, lastRender = -1e9, cacheOK = false;
+function render(fade) {
+  const dst = B[1 - bcur], s = cv._scale, pal = PALS[P.palette];
+  dst.width = cv.width; dst.height = cv.height;
+  const c = dst.getContext('2d', { alpha: false });
+  c.fillStyle = pal.bg; c.fillRect(0, 0, dst.width, dst.height);
+  c.setTransform(s, 0, 0, s, 0, 0);
+  for (const p of panels) drawPanel(c, p, pal);
+  drawHeader(c, pal);
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  bold = fade && !QS.has('still') ? bcur : -1; bT0 = performance.now();
+  bcur = 1 - bcur; lastRender = performance.now(); dataDirty = false; cacheOK = true;
+}
+let iconsSeen = !(WALL || PREVIEW);
+function commit() {
+  layout();
+  render(true);
+  if (paused) { bold = -1; draw(performance.now()); }
+}
+
+/* ======================================================================
+   图标告警：负载越高，越多图标变黄、变红；边框轻轻呼吸
+   ====================================================================== */
+function load() { const L = D.last; return Math.max(typeof L.cpu === 'number' ? L.cpu : 0, typeof L.mem === 'number' ? (L.mem - 20) * 1.1 : 0) / 100; }
+function iconState(i) {
+  const ic = icons[i], th = 0.5 + 0.45 * hash2(Math.round(ic.x), Math.round(ic.y), 77), l = load();
+  return l > th ? 2 : l > th - 0.15 ? 1 : 0;
+}
+function drawAlerts(t) {
+  if (!P.alerts) return;
+  icons.forEach((ic, i) => {
+    const st = iconState(i), col = [C.green, C.yellow, C.red][st];
+    const sp = [0.8, 1.6, 3.2][st], k = 0.5 + 0.5 * Math.sin(t * sp + i * 1.7);
+    ctx.globalAlpha = [0.28, 0.45, 0.6][st] + [0.15, 0.25, 0.4][st] * k;
+    ctx.strokeStyle = col; ctx.lineWidth = st === 2 ? 2 : 1.5;
+    if (st === 2) { ctx.shadowColor = col; ctx.shadowBlur = 10 * k * cv._scale; }
+    ctx.beginPath(); ctx.roundRect(ic.x - 4, ic.y - 3, ic.w + 8, ic.h + 6, 8); ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1; ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(ic.x + ic.w + 1, ic.y + 2, 3.5, 0, 6.2832); ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+}
+
+/* ======================================================================
+   尺寸 / 主循环
+   ====================================================================== */
+function resize() {
+  const box = cv.getBoundingClientRect();
+  W = box.width || innerWidth; H = box.height || innerHeight;
+  const scale = PREVIEW ? 0.5 : (devicePixelRatio || 1);
+  cv.width = Math.round(W * scale); cv.height = Math.round(H * scale); cv._scale = scale;
+  cacheOK = false;
+}
+let simT = 0, lastT = 0, frameN = 0, paused = false, demoClock = 0, realSeenAt = -1;
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (paused) { lastT = 0; return; }
+  if (lastT && now - lastT < 31) return;                 // 30fps
+  const dt = lastT ? Math.min((now - lastT) / 1000, 0.1) : 0.033;
+  lastT = now;
+  simT += dt;
+  // 没有宿主的数据（浏览器 / 设置预览，或宿主还没回应）：每秒一条演示数据
+  if (!D.real) { demoClock += dt; while (demoClock >= 1) { demoClock -= 1; pushSample(demoSample()); } }
+  if (iconsSeen && dataDirty && now - lastRender >= REFRESH[P.refresh] * 1000 - 20) {
+    const k = layoutKey;
+    layout();
+    render(k !== layoutKey);                              // 电池出现 / 消失会改变布局
+  }
+  draw(now);
+  frameN++;
+}
+function draw(now) {
+  const s = cv._scale;
+  if (!iconsSeen) { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = PALS[P.palette].bg; ctx.fillRect(0, 0, cv.width, cv.height); return; }
+  if (!cacheOK || B[bcur].width !== cv.width || B[bcur].height !== cv.height) { layout(); render(false); bold = -1; }
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1;
+  ctx.drawImage(B[bcur], 0, 0);
+  if (bold >= 0) {
+    const e = Math.min(1, (now - bT0) / MORPH_MS);
+    if (e < 1) { ctx.globalAlpha = 1 - e; ctx.drawImage(B[bold], 0, 0); ctx.globalAlpha = 1; } else bold = -1;
+  }
+  ctx.setTransform(s, 0, 0, s, 0, 0);
+  drawAlerts(simT);
+  // 顶栏右侧的"实时"小圆点
+  const pal = PALS[P.palette];
+  ctx.fillStyle = D.real ? C.green : C.orange; ctx.globalAlpha = 0.5 + 0.5 * Math.sin(simT * 3);
+  ctx.beginPath(); ctx.arc(W - 6, 6, 2.5, 0, 6.2832); ctx.fill(); ctx.globalAlpha = 1;
+}
+
+/* ======================================================================
+   浏览器里单独打开：示例图标，可以拖
+   ====================================================================== */
+const desktop = document.getElementById('desktop');
+const SAMPLE = [['回收站', '#7b8fb5'], ['此电脑', '#2f7de1'], ['项目资料', '#e3a32f'], ['设计稿', '#db2777'], ['周报.xlsx', '#107c41'],
+  ['合同.pdf', '#d33a2c'], ['Chrome', '#f59e0b'], ['VS Code', '#2563eb'], ['Figma', '#8b5cf6']];
+let grid = { cols: 1, rows: 1 }, drag = null;
+const cellPos = (c, r) => ({ x: GRID_X0 + c * CELL_W, y: GRID_Y0 + r * CELL_H });
+function addIcon([name, color], pos) {
+  const el = document.createElement('div');
+  el.className = 'icon';
+  el.innerHTML = `<div class="glyph" style="background:${color}">${[...name][0]}</div><div class="label">${name}</div>`;
+  el.style.left = pos.x + 'px'; el.style.top = pos.y + 'px';
+  desktop.appendChild(el);
+  const ic = { x: pos.x, y: pos.y, w: el.offsetWidth, h: el.offsetHeight, el };
+  icons.push(ic);
+  el.addEventListener('pointerdown', e => { if (e.button) return; el.setPointerCapture(e.pointerId); el.classList.remove('settle'); drag = { ic, sx: e.clientX, sy: e.clientY, ox: ic.x, oy: ic.y }; });
+  el.addEventListener('pointermove', e => { if (!drag || drag.ic !== ic) return; el.classList.add('drag'); el.style.left = drag.ox + e.clientX - drag.sx + 'px'; el.style.top = drag.oy + e.clientY - drag.sy + 'px'; });
+  el.addEventListener('pointerup', e => {
+    if (!drag || drag.ic !== ic) return;
+    const d = drag; drag = null; el.classList.remove('drag');
+    const cx = d.ox + e.clientX - d.sx + ic.w / 2, cy = d.oy + e.clientY - d.sy + ic.h / 2;
+    let best = null, bd = Infinity;
+    for (let c = 0; c < grid.cols; c++) for (let r = 0; r < grid.rows; r++) {
+      const p = cellPos(c, r);
+      if (icons.some(o => o !== ic && Math.abs(o.x - p.x) < 2 && Math.abs(o.y - p.y) < 2)) continue;
+      const dd = Math.hypot(p.x + CELL_W / 2 - cx, p.y + CELL_H / 2 - cy);
+      if (dd < bd) { bd = dd; best = p; }
+    }
+    if (!best) best = { x: d.ox, y: d.oy };
+    el.classList.add('settle'); ic.x = best.x; ic.y = best.y; el.style.left = best.x + 'px'; el.style.top = best.y + 'px';
+    if (best.x !== d.ox || best.y !== d.oy) commit();
+  });
+  return ic;
+}
+function sampleLayout() {
+  grid.cols = Math.max(1, Math.floor((W - GRID_X0) / CELL_W)); grid.rows = Math.max(1, Math.floor((H - TASKBAR - GRID_Y0) / CELL_H));
+  let i = 0;
+  for (let r = 0; r < Math.min(6, grid.rows); r++) addIcon(SAMPLE[i++ % SAMPLE.length], cellPos(0, r));
+  for (let r = 0; r < Math.min(2, grid.rows); r++) addIcon(SAMPLE[i++ % SAMPLE.length], cellPos(1, r));
+}
+const hint = document.getElementById('hint');
+addEventListener('keydown', e => {
+  if (WALL || PREVIEW) return;
+  const k = e.key.toLowerCase();
+  if (k === 'h') hint.classList.toggle('hidden');
+  else if (k === 'p') { P.palette = (P.palette + 1) % 2; commit(); }
+  else if (k === 'l') { demo.boost = demo.boost ? 0 : 55; }
+});
+let resizeT = 0;
+addEventListener('resize', () => {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(() => { resize(); if (iconsSeen) commit(); }, 100);
+});
+
+/* ======================================================================
+   托管模式：icons / settings / reset / pause / screens，另外：
+   stats（每秒一条本机状态）/ statsHist（宿主保存的最近 15 分钟）
+   ====================================================================== */
+function applySettings(v) {
+  let dirty = false;
+  for (const k in v) {
+    if (!(k in LIMITS) || typeof v[k] !== 'number' || !isFinite(v[k])) continue;
+    const x = Math.round(clamp(v[k], LIMITS[k][0], LIMITS[k][1]));
+    if (P[k] === x) continue;
+    P[k] = x; dirty = true;
+  }
+  if (dirty && iconsSeen) commit();
+}
+function takeReal(list) {
+  if (!D.real) { resetData(); D.real = true; }
+  for (const s of list) pushSample(s);
+}
+function drawGhosts() {
+  document.getElementById('ghosts').innerHTML = icons.map(ic => `<div class="ghost" style="left:${ic.x}px;top:${ic.y}px;width:${ic.w}px;height:${ic.h}px"><i></i><b></b></div>`).join('');
+}
+function startHostedMode() {
+  document.body.classList.add('wall');
+  if (PREVIEW) {
+    document.body.classList.add('preview');
+    const g = document.createElement('div'); g.id = 'ghosts'; document.body.appendChild(g);
+  }
+  icons = [];
+  const handle = m => {
+    if (m.t === 'pause') { paused = PREVIEW ? false : !!m.v; return; }
+    if (m.t === 'stats') { takeReal([m]); return; }
+    if (m.t === 'statsHist') { if (Array.isArray(m.list)) { resetData(); D.real = true; takeReal(m.list); } return; }
+    if (m.t === 'screens') {
+      if (Array.isArray(m.me)) { const k = devicePixelRatio || 1; MON = { x: m.me[0] / k, y: m.me[1] / k }; SCREENS = m.all; }
+      return;
+    }
+    if (m.t === 'settings') { applySettings(m.v || {}); return; }
+    if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
+    if (m.t !== 'icons') return;
+    const k = window.devicePixelRatio || 1;
+    icons = m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : [];
+    if (PREVIEW) drawGhosts();
+    iconsSeen = true;
+    commit();
+  };
+  if (PREVIEW) {
+    fillDemo();
+    addEventListener('message', ev => { if (ev.source === parent) handle(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data); });
+    parent.postMessage(JSON.stringify({ t: 'ready' }), '*');
+    return;
+  }
+  const host = window.chrome && window.chrome.webview;
+  if (!host) return;
+  host.addEventListener('message', ev => handle(JSON.parse(ev.data)));
+  host.postMessage('ready');
+  host.postMessage('stats|on');                            // 请宿主开始每秒发本机状态
+}
+
+/* ---------- 启动 ---------- */
+window.__dbg = {
+  P, D, commit,
+  bench() {
+    const a = performance.now(); render(false); const r = performance.now() - a;
+    const ts = [];
+    for (let i = 0; i < 10; i++) { const b = performance.now(); draw(performance.now()); ts.push(performance.now() - b); }
+    ts.sort((x, y) => x - y);
+    return { frame: +ts[5].toFixed(2), render: +r.toFixed(1), panels: panels.length, canvas: cv.width + 'x' + cv.height };
+  },
+};
+resize();
+if (WALL || PREVIEW) startHostedMode();
+else { fillDemo(); sampleLayout(); commit(); }
+requestAnimationFrame(frame);
+</script>
+<script src="share.js"></script>   <!-- 分享图片 / 分享动画（示例图标、名字是色块） -->
+</body>
+</html>

@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deskland · 语法树（原型）</title>
+<!--
+  Deskland · 语法树主题（抽象语法树；Canvas 2D，极简）
+  - 图标是语法树的节点：每个图标找它上方最近的节点当父节点，标上 Call、Block、Identifier 之类的类型；
+    空地上再按语法规则长出一些小节点（Identifier、Literal……），树枝从上往下分叉
+  - "解析器"按先序遍历一个个点亮节点，一道光沿树枝从父节点走到子节点；底部的源码条同步高亮当前的词
+  - 多个显示器：最顶上一个 Program 横跨所有屏幕，每块屏幕是它下面的一个 Module；按系统时钟同步，每轮一起开始
+  - 节点类型和名字都是编出来的，不读取任何真实代码
+  性能：网格、树枝、节点画进静态缓存（图标或设置变化时重画，新旧交叉淡入）；每帧只贴缓存，再画几个被点亮的节点和一道光
+-->
+<style>
+  :root { --taskbar: 48px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #f6f3ec; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif; }
+  #art { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #desktop { position: fixed; left: 0; top: 0; right: 0; bottom: var(--taskbar); }
+  .icon {
+    position: absolute; width: 76px; padding: 4px 2px 5px;
+    display: flex; flex-direction: column; align-items: center;
+    border: 1px solid transparent; border-radius: 4px;
+    user-select: none; touch-action: none; cursor: default;
+  }
+  .icon:hover { background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.2); }
+  .icon.drag { opacity: .88; z-index: 10; transform: scale(1.04); }
+  .icon.settle { transition: left .22s cubic-bezier(.2,.8,.3,1), top .22s cubic-bezier(.2,.8,.3,1); }
+  .glyph { width: 48px; height: 48px; border-radius: 10px; display: grid; place-items: center; color: #fff;
+    font-size: 21px; font-weight: 700; box-shadow: 0 2px 6px rgba(0,0,0,.35); pointer-events: none; }
+  .label {
+    margin-top: 3px; max-width: 72px; font-size: 12px; line-height: 15px; color: #fff; text-align: center;
+    text-shadow: 0 0 2px rgba(0,0,0,.95), 0 1px 3px rgba(0,0,0,.85);
+    word-break: break-all; overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; pointer-events: none;
+  }
+  #taskbar {
+    position: fixed; left: 0; right: 0; bottom: 0; height: var(--taskbar);
+    background: rgba(20,22,30,.62); backdrop-filter: blur(28px) saturate(1.6); -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    border-top: 1px solid rgba(255,255,255,.08); z-index: 40;
+  }
+  #hint {
+    position: fixed; top: 14px; right: 14px; padding: 10px 14px; border-radius: 10px; z-index: 50;
+    background: rgba(30,28,24,.82); color: #f6f3ec; font-size: 12px; line-height: 1.6;
+    border: 1px solid rgba(255,255,255,.14); backdrop-filter: blur(16px);
+  }
+  #hint.hidden { display: none; }
+  body.wall #desktop, body.wall #taskbar, body.wall #hint { display: none; }
+  #ghosts { position: fixed; inset: 0; pointer-events: none; display: none; }
+  body.preview #ghosts { display: block; }
+  .ghost { position: absolute; }
+  .ghost i { position: absolute; left: 50%; top: 4px; width: 48px; height: 48px; margin-left: -24px; border-radius: 9px;
+    background: rgba(255,255,255,.88); box-shadow: 3px 6px 8px rgba(0,0,0,.35); }
+  .ghost b { position: absolute; left: 14%; right: 14%; top: 60px; height: 10px; border-radius: 5px; background: rgba(255,255,255,.75); }
+</style>
+</head>
+<body>
+<canvas id="art"></canvas>
+<div id="desktop"></div>
+<div id="taskbar"></div>
+<div id="hint"><b>Deskland · 语法树</b><br>拖动图标，语法树会重新长好<br>R 换一张 · P 换配色 · H 隐藏提示</div>
+
+<script>
+'use strict';
+
+/* ======================================================================
+   参数（默认值和 themes.json 里语法树主题的 default 保持一致）
+   ====================================================================== */
+const CELL_W = 76, CELL_H = 100, GRID_X0 = 4, GRID_Y0 = 6, TASKBAR = 48;
+const MORPH_MS = 1000, NODE_H = 22, STRIP_H = 34;
+
+const QS = new URLSearchParams(location.search);
+const WALL = QS.has('wallpaper');
+const PREVIEW = QS.has('preview');
+const STILL = QS.has('still');
+const P = { palette: 0, density: 0.6, values: 1, speed: 1, strip: 1 };
+const DEFAULTS = Object.assign({}, P);
+const LIMITS = { palette: [0, 2], density: [0, 1], values: [0, 1], speed: [0.25, 3], strip: [0, 1] };
+const INTS = new Set(['palette', 'values', 'strip']);
+
+const cv = document.getElementById('art');
+const ctx = cv.getContext('2d', { alpha: false });
+let W = innerWidth, H = innerHeight;
+let icons = [];
+let seed = QS.has('seed') ? (+QS.get('seed') | 0) : (WALL || PREVIEW) ? 20261113 : (Math.random() * 1e6) | 0;
+const FIX_NOW = QS.has('now') ? +QS.get('now') : null;
+const wallClock = () => FIX_NOW !== null ? FIX_NOW + performance.now() / 1000 : Date.now() / 1000;
+
+/* ---------- 显示器布局（CSS 像素，虚拟桌面坐标；调试：?me=x,y&all=x,y,w,h;...） ---------- */
+let MON = { x: 0, y: 0 }, SCREENS = null;
+if (QS.has('me')) { const [x, y] = QS.get('me').split(',').map(Number); MON = { x: x || 0, y: y || 0 }; }
+if (QS.has('all')) SCREENS = QS.get('all').split(';').filter(Boolean).map(s => s.split(',').map(Number));
+function screensCss() { return SCREENS && SCREENS.length ? SCREENS : [[MON.x, MON.y, W, H]]; }
+function deskBounds() {
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  for (const [x, y, w, h] of screensCss()) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x + w); y1 = Math.max(y1, y + h); }
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+const multi = () => !!(SCREENS && SCREENS.length > 1);
+const monSalt = () => (Math.round(MON.x) * 7 + Math.round(MON.y) * 13) | 0;
+
+function mulberry32(a) {
+  return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const ease = t => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+
+/* ======================================================================
+   配色：纸张 / 石板 / 蓝图
+   ====================================================================== */
+const PALS = [
+  { bg: '#f6f3ec', grid: 'rgba(60,50,30,0.07)', edge: '#c8bfac', node: '#fffdf8', nodeT: 'rgba(255,253,248,0)', nodeEdge: '#d6ccb8', text: '#3b3630', muted: '#9a907e',
+    val: '#b4532a', accent: '#d9480f', soft: 'rgba(217,72,15,0.14)', frame: 'rgba(120,100,70,0.16)' },
+  { bg: '#12161d', grid: 'rgba(200,220,255,0.06)', edge: '#3a4555', node: '#1a2029', nodeT: 'rgba(26,32,41,0)', nodeEdge: '#2e3847', text: '#d5dbe5', muted: '#7d8899',
+    val: '#7ee0c3', accent: '#7ee0c3', soft: 'rgba(126,224,195,0.16)', frame: 'rgba(200,220,255,0.12)' },
+  { bg: '#123a63', grid: 'rgba(255,255,255,0.08)', edge: 'rgba(220,235,255,0.42)', node: '#164473', nodeT: 'rgba(22,68,115,0)', nodeEdge: 'rgba(220,235,255,0.5)', text: '#eaf3ff',
+    muted: '#a9c4e4', val: '#ffd479', accent: '#ffd479', soft: 'rgba(255,212,121,0.18)', frame: 'rgba(220,235,255,0.25)' },
+];
+const MONO = '"Cascadia Mono", Consolas, "Courier New", monospace';
+
+/* ======================================================================
+   语法规则：每种节点下面能长出哪些子节点（ESTree 风格，名字用短写）
+   ====================================================================== */
+const STMTS = ['FuncDecl', 'VarDecl', 'ExprStmt', 'If', 'Return', 'Import', 'ForOf'];
+const EXPRS = ['Call', 'Binary', 'Identifier', 'Literal', 'Member', 'Arrow'];
+const GRAMMAR = {
+  FuncDecl: ['Identifier', 'Params', 'Block'], Params: ['Identifier', 'Identifier'], Block: ['$stmt', '$stmt'],
+  VarDecl: ['Declarator'], Declarator: ['Identifier', '$expr'], ExprStmt: ['Call'], Call: ['Member', '$expr'],
+  Member: ['Identifier', 'Identifier'], If: ['Binary', 'Block'], Binary: ['Identifier', 'Literal'], Return: ['$expr'],
+  Import: ['Specifier', 'Literal'], Specifier: ['Identifier'], ForOf: ['Identifier', 'Identifier', 'Block'], Arrow: ['Params', 'Binary'],
+  Identifier: [], Literal: [],
+};
+const KEYWORD = { FuncDecl: 'function', VarDecl: 'const', ExprStmt: ';', If: 'if', Return: 'return', Import: 'import', ForOf: 'for',
+  Params: '(', Block: '{', Declarator: '=', Call: '(', Member: '.', Binary: '*', Specifier: '{', Arrow: '=>', Program: '', Module: '' };
+const WORDS = ['icon', 'layout', 'desk', 'grid', 'shore', 'cloud', 'frame', 'cache', 'pixel', 'scale', 'seed', 'wave', 'tile', 'sprite', 'layer',
+  'noise', 'state', 'theme', 'light', 'shadow', 'cursor', 'screen', 'node', 'token', 'parse', 'emit', 'scope', 'visit'];
+const isLeaf = t => !GRAMMAR[t] || GRAMMAR[t].length === 0 && t !== 'Program' && t !== 'Module';
+function kidTypes(type, rng) {
+  if (type === 'Program' || type === 'Module') { const n = 3 + Math.floor(rng() * 3), a = []; for (let i = 0; i < n; i++) a.push(STMTS[Math.floor(rng() * STMTS.length)]); return a; }
+  return (GRAMMAR[type] || []).map(t => t === '$stmt' ? STMTS[Math.floor(rng() * STMTS.length)] : t === '$expr' ? EXPRS[Math.floor(rng() * EXPRS.length)] : t);
+}
+function valueOf(type, rng) {
+  if (type === 'Identifier') return WORDS[Math.floor(rng() * WORDS.length)];
+  if (type === 'Literal') return rng() < 0.5 ? String(Math.floor(rng() * 100)) : `"${WORDS[Math.floor(rng() * WORDS.length)]}"`;
+  return '';
+}
+
+/* ======================================================================
+   树的规划
+   ====================================================================== */
+let T = null;    // { nodes, root, order, tokens, strip }
+const mctx = document.createElement('canvas').getContext('2d');
+function pillSize(n) {
+  mctx.font = `11px ${MONO}`;
+  const tw = mctx.measureText(n.type).width, vw = P.values && n.val ? mctx.measureText(' ' + n.val).width : 0;
+  n.w = Math.ceil(tw + vw + 18); n.h = NODE_H;
+}
+// 图标节点的框：左右往里收一点（同一排相邻图标的框不重叠），上下放一点
+const rectOf = n => n.ic ? { x: n.ic.x + 3, y: n.ic.y - 3, w: n.ic.w - 6, h: n.ic.h + 6 } : { x: n.x - n.w / 2, y: n.y - n.h / 2, w: n.w, h: n.h };
+const hit = (a, b, pad) => a.x - pad < b.x + b.w && a.x + a.w + pad > b.x && a.y - pad < b.y + b.h && a.y + a.h + pad > b.y;
+function plan() {
+  const rng = mulberry32((seed ^ 0xa57) + monSalt()), nodes = [], tags = [];
+  const bottom = H - TASKBAR - 8 - (P.strip ? STRIP_H + 14 : 0);
+  const blocked = (r, pad) => r.x < 6 || r.y < 6 || r.x + r.w > W - 6 || r.y + r.h > bottom ||
+    icons.some(ic => hit(ic, r, pad)) || nodes.some(n => hit(rectOf(n), r, pad)) || tags.some(t => hit(t, r, pad));
+  // 根：多屏时是这块屏幕的 Module（屏幕上方，靠近中间），单屏是 Program（最上面）；找一处没有图标的地方
+  const root = { type: multi() ? 'Module' : 'Program', val: '', kids: [], depth: 0, syn: 0 };
+  pillSize(root);
+  root.y = multi() ? 110 : 34;
+  for (const f of [0.5, 0.42, 0.58, 0.34, 0.66, 0.26, 0.74]) { root.x = W * f; if (!blocked(rectOf(root), 8)) break; }
+  nodes.push(root);
+  // 图标：按从上到下的顺序，找上方最近的节点当父节点（根总是候选）；孩子多的父节点稍微减分，让树分叉
+  const ins = icons.map(ic => ({ ic, x: ic.x + ic.w / 2, y: ic.y + ic.h / 2, kids: [], syn: 0 })).sort((a, b) => a.y - b.y || a.x - b.x);
+  for (const n of ins) {
+    let best = root, bc = Math.abs(n.x - root.x) + 0.5 * Math.abs(n.y - root.y) + 30 * root.kids.length + 120;
+    for (const m of nodes) {
+      if (!m.ic || m.ic.y + m.ic.h > n.ic.y + 4) continue;
+      const c = Math.abs(n.x - m.x) + 0.5 * (n.y - m.y) + 30 * m.kids.length;
+      if (c < bc) { bc = c; best = m; }
+    }
+    n.parent = best; best.kids.push(n); n.depth = best.depth + 1;
+    nodes.push(n);
+  }
+  // 从上往下给图标定类型：父节点的语法里挑；自己还有孩子的就挑不是叶子的类型
+  const assign = (m) => {
+    const opts = kidTypes(m.type, rng);
+    m.kids.forEach((k, i) => {
+      let t = opts.length ? opts[i % opts.length] : 'Block';
+      if (k.kids.length && isLeaf(t)) t = opts.find(o => !isLeaf(o)) || (m.type === 'Program' || m.type === 'Module' ? 'FuncDecl' : 'Block');
+      k.type = t; k.val = valueOf(t, rng);
+      assign(k);
+    });
+  };
+  assign(root);
+  // 图标的类型标签：放在图标右边（空着的话），否则左边；都不行才压在框的上边
+  mctx.font = `10px ${MONO}`;
+  for (const n of ins) {
+    const tw = mctx.measureText(n.type).width + 12, r = rectOf(n), cy = n.ic.y + Math.min(28, n.ic.h * 0.35);
+    let pos = null;
+    for (const x of [r.x + r.w + 6, r.x - 6 - tw]) {
+      const q = { x, y: cy - 8, w: tw, h: 16 };
+      if (!blocked(q, 3)) { pos = q; break; }
+    }
+    n.tag = pos || { x: r.x + r.w / 2 - tw / 2, y: Math.max(1, r.y - 8), w: tw, h: 16 };
+    if (pos) tags.push(pos);
+  }
+  // 空地上按语法长出小节点（广度优先：上层先占位置）
+  const maxSyn = Math.round(1 + P.density * 3), budget = Math.round(20 + P.density * 110);
+  const queue = [root, ...ins];
+  let made = 0;
+  while (queue.length && made < budget) {
+    const m = queue.shift();
+    if (m.syn >= maxSyn) continue;
+    let want = kidTypes(m.type, rng).slice(m.kids.length);
+    if (m === root) want = want.slice(0, Math.max(0, 5 - m.kids.length));
+    if (m.syn > 0 && P.density < 1) want = want.filter(() => rng() < 0.45 + 0.5 * P.density);
+    if (!want.length) continue;
+    const kids = want.map(t => { const k = { type: t, val: valueOf(t, rng), kids: [], parent: m, depth: m.depth + 1, syn: m.syn + 1 }; pillSize(k); return k; });
+    const r = rectOf(m), gap = 16, total = kids.reduce((a, k) => a + k.w, 0) + gap * (kids.length - 1);
+    const rootWide = m === root;
+    // 候选：正下方一排；放不下就挪一挪，或者放到右边 / 左边
+    const tries = rootWide ? [[0, 70], [0, 110], [0, 150]] : [[0, 40], [-40, 40], [40, 40], [0, 70], ['R', 0], ['L', 0], ['R', 36]];
+    for (const k of kids) {
+      for (const [dx, dy] of tries) {
+        let x, y;
+        if (rootWide) {
+          const i = kids.indexOf(k);
+          x = W * (i + 1) / (kids.length + 1); y = r.y + r.h + dy;
+        } else if (dx === 'R' || dx === 'L') {
+          const i = kids.indexOf(k);
+          x = dx === 'R' ? r.x + r.w + 26 + k.w / 2 : r.x - 26 - k.w / 2; y = r.y + r.h * 0.35 + i * (NODE_H + 12) + dy;
+        } else {
+          const i = kids.indexOf(k), before = kids.slice(0, i).reduce((a, q) => a + q.w + gap, 0);
+          x = m.x - total / 2 + before + k.w / 2 + dx; y = r.y + r.h + dy + NODE_H / 2;
+        }
+        k.x = x; k.y = y;
+        if (!blocked(rectOf(k), 9)) { nodes.push(k); m.kids.push(k); queue.push(k); made++; break; }
+      }
+    }
+  }
+  // 树枝的几何（贝塞尔曲线）：父节点底边 → 子节点顶边；子节点不在下方时从侧边连
+  for (const n of nodes) {
+    if (!n.parent) continue;
+    const a = rectOf(n.parent), b = rectOf(n);
+    if (b.y > a.y + a.h + 6) {
+      const x0 = a.x + a.w / 2, y0 = a.y + a.h, x1 = b.x + b.w / 2, y1 = b.y, dy = y1 - y0;
+      n.edge = [x0, y0, x0, y0 + dy * 0.55, x1, y1 - dy * 0.55, x1, y1];
+    } else {
+      const right = b.x > a.x + a.w / 2;
+      const x0 = right ? a.x + a.w : a.x, y0 = a.y + Math.min(a.h / 2, 30), x1 = right ? b.x : b.x + b.w, y1 = b.y + b.h / 2, dx = x1 - x0;
+      n.edge = [x0, y0, x0 + dx * 0.5, y0, x1 - dx * 0.5, y1, x1, y1];
+    }
+  }
+  // 先序遍历（孩子按横坐标从左到右）
+  const order = [];
+  const walk = n => { order.push(n); n.kids.slice().sort((p, q) => p.x - q.x).forEach(walk); };
+  walk(root);
+  order.forEach((n, i) => n.i = i);
+  // 源码条：每个节点对应一个词
+  const tokens = order.map(n => n.val || KEYWORD[n.type] || n.type.toLowerCase());
+  const sw = Math.min(680, W - 40), sx = (W - sw) / 2, sy = H - TASKBAR - 10 - STRIP_H;
+  const strip = P.strip && !icons.some(ic => ic.x - 8 < sx + sw && ic.x + ic.w + 8 > sx && ic.y - 8 < sy + STRIP_H && ic.y + ic.h + 8 > sy) ? { x: sx, y: sy, w: sw } : null;
+  T = { nodes, root, order, tokens, strip };
+}
+const bez = (e, u) => { const v = 1 - u; return [v * v * v * e[0] + 3 * v * v * u * e[2] + 3 * v * u * u * e[4] + u * u * u * e[6], v * v * v * e[1] + 3 * v * v * u * e[3] + 3 * v * u * u * e[5] + u * u * u * e[7]]; };
+
+/* ======================================================================
+   画节点
+   ====================================================================== */
+function drawPill(c, n, pal, hi) {
+  const r = rectOf(n);
+  c.fillStyle = pal.node; c.beginPath(); c.roundRect(r.x, r.y, r.w, r.h, r.h / 2); c.fill();
+  if (hi > 0) { c.fillStyle = pal.soft; c.globalAlpha = hi; c.fill(); c.globalAlpha = 1; }
+  c.strokeStyle = hi > 0 ? pal.accent : pal.nodeEdge; c.lineWidth = hi > 0 ? 1.2 + 0.6 * hi : 1; c.stroke();
+  c.font = `11px ${MONO}`; c.textBaseline = 'middle'; c.textAlign = 'left';
+  c.fillStyle = hi > 0.5 ? pal.accent : pal.text; c.fillText(n.type, r.x + 9, r.y + r.h / 2 + 0.5);
+  if (P.values && n.val) { mctx.font = c.font; c.fillStyle = pal.val; c.fillText(' ' + n.val, r.x + 9 + mctx.measureText(n.type).width, r.y + r.h / 2 + 0.5); }
+}
+function drawIconNode(c, n, pal, hi) {
+  const r = rectOf(n);
+  c.strokeStyle = hi > 0 ? pal.accent : pal.frame; c.lineWidth = hi > 0 ? 1.4 + hi : 1.2;
+  c.beginPath(); c.roundRect(r.x, r.y, r.w, r.h, 10); c.stroke();
+  if (hi > 0) { c.fillStyle = pal.soft; c.globalAlpha = hi; c.fill(); c.globalAlpha = 1; }
+  // 类型标签（位置在 plan() 里选好）
+  const t = n.tag;
+  c.font = `10px ${MONO}`; c.textBaseline = 'middle'; c.textAlign = 'center';
+  c.fillStyle = pal.bg; c.beginPath(); c.roundRect(t.x, t.y, t.w, t.h, 8); c.fill();
+  c.strokeStyle = hi > 0 ? pal.accent : pal.nodeEdge; c.lineWidth = 1; c.stroke();
+  c.fillStyle = hi > 0.5 ? pal.accent : pal.muted; c.fillText(n.type, t.x + t.w / 2, t.y + t.h / 2 + 0.5);
+  c.textAlign = 'left';
+}
+// 多屏：最顶上的 Program 和连到每块屏幕 Module 的树枝（按虚拟桌面坐标，每块屏幕都画得出来）
+function worldRoot() {
+  if (!multi()) return null;
+  const VB = deskBounds(), root = { type: 'Program', val: '', x: VB.x + VB.w / 2, y: VB.y + 36 };
+  pillSize(root);
+  // 别的屏幕的 Module 假定在它们的上方正中；自己这块用实际（可能为了躲图标挪过）的位置
+  const mods = SCREENS.map(([x, y, w]) => (Math.abs(x - MON.x) < 1 && Math.abs(y - MON.y) < 1 && T)
+    ? { type: 'Module', val: '', x: T.root.x + MON.x, y: T.root.y + MON.y, own: true }
+    : { type: 'Module', val: '', x: x + w / 2, y: y + 110 });
+  mods.forEach(pillSize);
+  return { root, mods };
+}
+function worldEdge(root, mod) {
+  const x0 = root.x, y0 = root.y + NODE_H / 2, x1 = mod.x, y1 = mod.y - NODE_H / 2, dy = y1 - y0;
+  return [x0, y0, x0, y0 + dy * 0.6, x1, y1 - dy * 0.6, x1, y1];
+}
+
+/* ======================================================================
+   静态缓存
+   ====================================================================== */
+const Lc = [0, 1, 2].map(() => document.createElement('canvas'));
+let cur = 0, old = -1, morphT0 = 0, cacheOK = false;
+function renderCache(dst, full) {
+  dst.width = cv.width; dst.height = cv.height;
+  const c = dst.getContext('2d', { alpha: false }), s = cv._scale, pal = PALS[P.palette];
+  c.fillStyle = pal.bg; c.fillRect(0, 0, dst.width, dst.height);
+  c.setTransform(s, 0, 0, s, 0, 0);
+  c.fillStyle = pal.grid;                                  // 点阵（虚拟桌面坐标，跨屏对齐）
+  const gs = 24;
+  for (let y = Math.ceil(MON.y / gs) * gs - MON.y; y < H; y += gs) for (let x = Math.ceil(MON.x / gs) * gs - MON.x; x < W; x += gs) c.fillRect(x - 0.75, y - 0.75, 1.5, 1.5);
+  c.lineCap = 'round';
+  const wr = worldRoot();
+  if (wr) {
+    c.save(); c.translate(-MON.x, -MON.y);
+    c.strokeStyle = pal.edge; c.lineWidth = 1.4;
+    for (const m of wr.mods) { const e = worldEdge(wr.root, m); c.beginPath(); c.moveTo(e[0], e[1]); c.bezierCurveTo(e[2], e[3], e[4], e[5], e[6], e[7]); c.stroke(); }
+    drawPill(c, wr.root, pal, 0);
+    for (const m of wr.mods) if (!m.own) drawPill(c, m, pal, 0);
+    c.restore();
+  }
+  if (full) {
+    c.strokeStyle = pal.edge; c.lineWidth = 1.3;
+    for (const n of T.nodes) if (n.edge) { const e = n.edge; c.beginPath(); c.moveTo(e[0], e[1]); c.bezierCurveTo(e[2], e[3], e[4], e[5], e[6], e[7]); c.stroke(); }
+    for (const n of T.nodes) (n.ic ? drawIconNode : drawPill)(c, n, pal, 0);
+  } else drawPill(c, T.root, pal, 0);
+  if (full && T.strip) {                                    // 源码条的底板（字每帧画）
+    const st = T.strip;
+    c.fillStyle = pal.node; c.strokeStyle = pal.nodeEdge; c.lineWidth = 1;
+    c.beginPath(); c.roundRect(st.x, st.y, st.w, STRIP_H, 10); c.fill(); c.stroke();
+  }
+  c.setTransform(1, 0, 0, 1, 0, 0);
+}
+function morphE(now) { return old < 0 ? 1 : Math.min(1, (now - morphT0) / MORPH_MS); }
+function flatten(dst, now) {
+  dst.width = cv.width; dst.height = cv.height;
+  const c = dst.getContext('2d', { alpha: false });
+  c.drawImage(Lc[cur], 0, 0);
+  c.globalAlpha = 1 - ease(morphE(now)); c.drawImage(Lc[old], 0, 0); c.globalAlpha = 1;
+}
+let iconsSeen = !(WALL || PREVIEW);
+function commit(fromEmpty) {
+  const now = performance.now();
+  plan();
+  let from = -1;
+  if (fromEmpty) { from = cur === 0 ? 1 : 0; renderCache(Lc[from], false); }
+  else if (cacheOK && old >= 0 && morphE(now) < 1) { from = [0, 1, 2].find(i => i !== cur && i !== old); flatten(Lc[from], now); }
+  else if (cacheOK) from = cur;
+  cur = [0, 1, 2].find(i => i !== from);
+  renderCache(Lc[cur], true);
+  old = STILL ? -1 : from; morphT0 = now; cacheOK = true;
+  if (paused) { old = -1; draw(now); }
+}
+
+/* ======================================================================
+   解析动画：按系统时钟分成一轮一轮，每轮从 Program 出发，先序遍历点亮节点
+   ====================================================================== */
+const START = 1.4, TAIL = 3.2, GLOW = 2.4;
+function drawParse(t) {
+  const pal = PALS[P.palette], period = 24 / P.speed, ph = ((t % period) + period) % period;
+  const N = T.order.length, step = Math.min(0.5 / P.speed, (period - START - TAIL) / Math.max(1, N));
+  const glowP = 4 * P.speed;                               // 光点的速度（每秒走完几条树枝）
+  // 多屏：开头一道光从 Program 走到每块屏幕的 Module
+  const wr = worldRoot();
+  if (wr && ph < START) {
+    ctx.save(); ctx.translate(-MON.x, -MON.y);
+    const u = ease(clamp(ph / (START - 0.2), 0, 1));
+    for (const m of wr.mods) dot(worldEdge(wr.root, m), u, pal);
+    if (ph < 1) drawPill(ctx, wr.root, pal, 1 - ph);
+    ctx.restore();
+  }
+  for (let i = 0; i < N; i++) {
+    const n = T.order[i], tv = START + i * step;
+    if (ph < tv - 1 / glowP) break;
+    const since = ph - tv;
+    if (since < 0) { if (n.edge) dot(n.edge, clamp(1 + since * glowP, 0, 1), pal); continue; }   // 光正沿树枝走过来
+    if (since > GLOW) continue;
+    const hi = since < 0.25 ? since / 0.25 : 1 - (since - 0.25) / (GLOW - 0.25);
+    (n.ic ? drawIconNode : drawPill)(ctx, n, pal, clamp(hi, 0, 1));
+  }
+  // 源码条：当前的词高亮，前后各几个词
+  if (T.strip) {
+    const st = T.strip, cur = clamp(Math.floor((ph - START) / step), -1, N - 1);
+    ctx.save(); ctx.beginPath(); ctx.roundRect(st.x, st.y, st.w, STRIP_H, 10); ctx.clip();
+    ctx.font = `12px ${MONO}`; ctx.textBaseline = 'middle';
+    const sp = ctx.measureText(' ').width, mid = st.x + st.w / 2, y = st.y + STRIP_H / 2 + 0.5;
+    const tokW = i => ctx.measureText(T.tokens[i]).width;
+    const ci = Math.max(0, cur);
+    let x = mid - tokW(ci) / 2;
+    for (let i = ci; i < N && x < st.x + st.w; i++) { drawTok(i, x, y, cur, pal); x += tokW(i) + sp * 2; }
+    x = mid - tokW(ci) / 2;
+    for (let i = ci - 1; i >= 0 && x > st.x; i--) { x -= tokW(i) + sp * 2; drawTok(i, x, y, cur, pal); }
+    const fade = (x0, x1) => { const g = ctx.createLinearGradient(x0, 0, x1, 0); g.addColorStop(0, pal.node); g.addColorStop(1, pal.nodeT); return g; };
+    ctx.fillStyle = fade(st.x, st.x + 60); ctx.fillRect(st.x, st.y, 60, STRIP_H);
+    ctx.fillStyle = fade(st.x + st.w, st.x + st.w - 60); ctx.fillRect(st.x + st.w - 60, st.y, 60, STRIP_H);
+    ctx.restore();
+  }
+}
+function drawTok(i, x, y, cur, pal) {
+  const n = T.order[i], t = T.tokens[i];
+  if (i === cur) { ctx.fillStyle = pal.soft; ctx.fillRect(x - 3, y - 10, ctx.measureText(t).width + 6, 20); ctx.fillStyle = pal.accent; }
+  else ctx.fillStyle = i < cur ? pal.text : pal.muted;
+  if (i !== cur && n.val) ctx.fillStyle = pal.val;
+  ctx.globalAlpha = i === cur ? 1 : i < cur ? 0.85 : 0.5;
+  ctx.fillText(t, x, y); ctx.globalAlpha = 1;
+}
+function dot(e, u, pal) {
+  if (u <= 0 || u >= 1) return;
+  const [x, y] = bez(e, u);
+  ctx.fillStyle = pal.soft; ctx.beginPath(); ctx.arc(x, y, 7, 0, 6.2832); ctx.fill();
+  ctx.fillStyle = pal.accent; ctx.beginPath(); ctx.arc(x, y, 2.6, 0, 6.2832); ctx.fill();
+}
+
+/* ======================================================================
+   尺寸 / 主循环
+   ====================================================================== */
+function resize() {
+  const box = cv.getBoundingClientRect();
+  W = box.width || innerWidth; H = box.height || innerHeight;
+  const scale = PREVIEW ? 0.5 : (devicePixelRatio || 1);
+  cv.width = Math.round(W * scale); cv.height = Math.round(H * scale); cv._scale = scale;
+  cacheOK = false;
+}
+let simT = 0, lastT = 0, frameN = 0, paused = false;
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (paused) { lastT = 0; return; }
+  if (lastT && now - lastT < 31) return;                 // 30fps
+  const dt = lastT ? Math.min((now - lastT) / 1000, 0.1) : 0.033;
+  lastT = now;
+  simT += dt;
+  draw(now);
+  frameN++;
+}
+function draw(now) {
+  const s = cv._scale;
+  if (!iconsSeen) { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = PALS[P.palette].bg; ctx.fillRect(0, 0, cv.width, cv.height); return; }
+  if (!T) plan();
+  if (!cacheOK || Lc[cur].width !== cv.width || Lc[cur].height !== cv.height) { renderCache(Lc[cur], true); old = -1; cacheOK = true; }
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1;
+  ctx.drawImage(Lc[cur], 0, 0);
+  if (old >= 0) {
+    const e = morphE(now);
+    if (e < 1) { ctx.globalAlpha = 1 - ease(e); ctx.drawImage(Lc[old], 0, 0); ctx.globalAlpha = 1; }
+    else old = -1;
+  }
+  ctx.setTransform(s, 0, 0, s, 0, 0);
+  drawParse(wallClock());
+}
+
+/* ======================================================================
+   浏览器里单独打开：示例图标，可以拖
+   ====================================================================== */
+const desktop = document.getElementById('desktop');
+const SAMPLE = [['回收站', '#7b8fb5'], ['此电脑', '#2f7de1'], ['项目资料', '#e3a32f'], ['设计稿', '#db2777'], ['周报.xlsx', '#107c41'],
+  ['合同.pdf', '#d33a2c'], ['Chrome', '#f59e0b'], ['VS Code', '#2563eb'], ['Figma', '#8b5cf6'], ['Steam', '#334155'],
+  ['照片', '#0ea5a4'], ['下载', '#e3a32f'], ['笔记.txt', '#64748b']];
+let grid = { cols: 1, rows: 1 }, drag = null;
+const cellPos = (c, r) => ({ x: GRID_X0 + c * CELL_W, y: GRID_Y0 + r * CELL_H });
+function addIcon([name, color], pos) {
+  const el = document.createElement('div');
+  el.className = 'icon';
+  el.innerHTML = `<div class="glyph" style="background:${color}">${[...name][0]}</div><div class="label">${name}</div>`;
+  el.style.left = pos.x + 'px'; el.style.top = pos.y + 'px';
+  desktop.appendChild(el);
+  const ic = { x: pos.x, y: pos.y, w: el.offsetWidth, h: el.offsetHeight, el };
+  icons.push(ic);
+  el.addEventListener('pointerdown', e => { if (e.button) return; el.setPointerCapture(e.pointerId); el.classList.remove('settle'); drag = { ic, sx: e.clientX, sy: e.clientY, ox: ic.x, oy: ic.y }; });
+  el.addEventListener('pointermove', e => { if (!drag || drag.ic !== ic) return; el.classList.add('drag'); el.style.left = drag.ox + e.clientX - drag.sx + 'px'; el.style.top = drag.oy + e.clientY - drag.sy + 'px'; });
+  el.addEventListener('pointerup', e => {
+    if (!drag || drag.ic !== ic) return;
+    const d = drag; drag = null; el.classList.remove('drag');
+    const cx = d.ox + e.clientX - d.sx + ic.w / 2, cy = d.oy + e.clientY - d.sy + ic.h / 2;
+    let best = null, bd = Infinity;
+    for (let c = 0; c < grid.cols; c++) for (let r = 0; r < grid.rows; r++) {
+      const p = cellPos(c, r);
+      if (icons.some(o => o !== ic && Math.abs(o.x - p.x) < 2 && Math.abs(o.y - p.y) < 2)) continue;
+      const dd = Math.hypot(p.x + CELL_W / 2 - cx, p.y + CELL_H / 2 - cy);
+      if (dd < bd) { bd = dd; best = p; }
+    }
+    if (!best) best = { x: d.ox, y: d.oy };
+    el.classList.add('settle'); ic.x = best.x; ic.y = best.y; el.style.left = best.x + 'px'; el.style.top = best.y + 'px';
+    if (best.x !== d.ox || best.y !== d.oy) commit(false);
+  });
+  return ic;
+}
+function sampleLayout() {
+  grid.cols = Math.max(1, Math.floor((W - GRID_X0) / CELL_W)); grid.rows = Math.max(1, Math.floor((H - TASKBAR - GRID_Y0) / CELL_H));
+  const cells = [];
+  for (let r = 0; r < Math.min(5, grid.rows); r++) cells.push([0, r]);
+  for (let r = 0; r < Math.min(2, grid.rows); r++) cells.push([1, r]);
+  const mc = Math.floor(grid.cols * 0.55), mr = Math.floor(grid.rows * 0.3);
+  for (const [dc, dr] of [[0, 0], [-1, 1], [1, 1]]) cells.push([mc + dc, mr + dr]);
+  let i = 0;
+  for (const [c, r] of cells) if (c >= 0 && c < grid.cols && r < grid.rows) addIcon(SAMPLE[i++ % SAMPLE.length], cellPos(c, r));
+}
+const hint = document.getElementById('hint');
+addEventListener('keydown', e => {
+  if (WALL || PREVIEW) return;
+  const k = e.key.toLowerCase();
+  if (k === 'r') reseed((Math.random() * 1e6) | 0);
+  else if (k === 'h') hint.classList.toggle('hidden');
+  else if (k === 'p') { P.palette = (P.palette + 1) % 3; commit(false); }
+});
+let resizeT = 0;
+addEventListener('resize', () => {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(() => { resize(); if (iconsSeen) commit(false); }, 100);
+});
+
+/* ======================================================================
+   托管模式：icons / settings / reset / pause / screens
+   ====================================================================== */
+function reseed(v) { seed = v; if (iconsSeen) commit(true); }
+function applySettings(v) {
+  if (typeof v.seed === 'number' && v.seed !== seed) reseed(v.seed);
+  let dirty = false;
+  for (const k in v) {
+    if (!(k in LIMITS) || typeof v[k] !== 'number' || !isFinite(v[k])) continue;
+    let x = clamp(v[k], LIMITS[k][0], LIMITS[k][1]);
+    if (INTS.has(k)) x = Math.round(x);
+    if (P[k] === x) continue;
+    P[k] = x;
+    if (k !== 'speed') dirty = true;
+  }
+  if (dirty && iconsSeen) commit(false);
+}
+function setScreens(m) {
+  if (!Array.isArray(m.me) || !Array.isArray(m.all)) return;
+  const k = devicePixelRatio || 1;
+  MON = { x: m.me[0] / k, y: m.me[1] / k };
+  SCREENS = m.all.filter(r => Array.isArray(r) && r.length === 4).map(r => r.map(v => v / k));
+  if (iconsSeen) commit(false);
+}
+function drawGhosts() {
+  document.getElementById('ghosts').innerHTML = icons.map(ic => `<div class="ghost" style="left:${ic.x}px;top:${ic.y}px;width:${ic.w}px;height:${ic.h}px"><i></i><b></b></div>`).join('');
+}
+function startHostedMode() {
+  document.body.classList.add('wall');
+  if (PREVIEW) {
+    document.body.classList.add('preview');
+    const g = document.createElement('div'); g.id = 'ghosts'; document.body.appendChild(g);
+  }
+  icons = [];
+  let first = true;
+  const handle = m => {
+    if (m.t === 'pause') { paused = PREVIEW ? false : !!m.v; return; }
+    if (m.t === 'screens') { setScreens(m); return; }
+    if (m.t === 'settings') { applySettings(m.v || {}); return; }
+    if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
+    if (m.t !== 'icons') return;
+    const k = window.devicePixelRatio || 1;
+    icons = m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : [];
+    if (PREVIEW) drawGhosts();
+    iconsSeen = true;
+    commit(first);
+    first = false;
+  };
+  if (PREVIEW) {
+    addEventListener('message', ev => { if (ev.source === parent) handle(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data); });
+    parent.postMessage(JSON.stringify({ t: 'ready' }), '*');
+    return;
+  }
+  const host = window.chrome && window.chrome.webview;
+  if (!host) return;
+  host.addEventListener('message', ev => handle(JSON.parse(ev.data)));
+  host.postMessage('ready');
+}
+
+/* ---------- 启动 ---------- */
+window.__dbg = {
+  P, commit, reseed,
+  bench() {
+    const ts = [];
+    for (let i = 0; i < 10; i++) { const a = performance.now(); draw(performance.now()); ts.push(performance.now() - a); }
+    ts.sort((a, b) => a - b);
+    const a = performance.now(); commit(false); const c = performance.now() - a;
+    return { frame: +ts[5].toFixed(2), commit: +c.toFixed(1), nodes: T.nodes.length, canvas: cv.width + 'x' + cv.height };
+  },
+};
+resize();
+if (WALL || PREVIEW) startHostedMode();
+else { sampleLayout(); commit(true); }
+requestAnimationFrame(frame);
+</script>
+<script src="share.js"></script>   <!-- 分享图片 / 分享动画（示例图标、名字是色块） -->
+</body>
+</html>

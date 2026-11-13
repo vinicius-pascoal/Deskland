@@ -1170,6 +1170,7 @@ class WallpaperForm : Form
     }
     public void Reload()
     {
+        SystemStats.Unsubscribe(this);                     // 新页面需要的话会重新请求
         if (web.CoreWebView2 == null) return;
         try { web.CoreWebView2.Reload(); }
         catch (InvalidOperationException ex) { WebDead(ex); }
@@ -1216,6 +1217,7 @@ class WallpaperForm : Form
     public void LoadPage(string newPage)
     {
         page = newPage;
+        SystemStats.Unsubscribe(this);
         if (web.CoreWebView2 == null) return;
         try { web.CoreWebView2.Navigate(PageUrl); }
         catch (InvalidOperationException ex) { WebDead(ex); }
@@ -1253,6 +1255,8 @@ class WallpaperForm : Form
                 if (msg != null && msg.StartsWith("snapshot|")) { OnSnapshot(msg); return; }
                 if (msg != null && msg.StartsWith("recprogress|")) { if (RecordProgress != null) RecordProgress(msg.Substring(12)); return; }
                 if (msg != null && msg.StartsWith("record|")) { OnRecord(msg); return; }
+                // 仪表盘主题要本机的 CPU / 内存等数字：只有页面明确请求才开始采样
+                if (msg == "stats|on") { SystemStats.Subscribe(this); return; }
                 core.PostWebMessageAsString(ScreensJson());
                 if (SettingsJson != null) core.PostWebMessageAsString(SettingsJson());
                 lastIcons = ""; lastPause = -1; PollIcons(); PollForeground();
@@ -1519,6 +1523,7 @@ class WallpaperForm : Form
     {
         if (shuttingDown) return;
         shuttingDown = true;
+        SystemStats.Unsubscribe(this);
         iconTimer.Stop(); fgTimer.Stop();
         ours.Remove(ownHandle);
         IntPtr parent = parentHwnd;
@@ -1534,6 +1539,7 @@ class WallpaperForm : Form
     {
         if (winEventHook != IntPtr.Zero) { Native.UnhookWinEvent(winEventHook); winEventHook = IntPtr.Zero; }
         iconTimer.Stop(); fgTimer.Stop();
+        SystemStats.Unsubscribe(this);
         ours.Remove(ownHandle);                          // 共用的 IconReader 由 HostContext 退出时释放
         base.OnHandleDestroyed(e);
     }
@@ -1622,8 +1628,169 @@ class IconReader : IDisposable
     public void Dispose() { Close(); }
 }
 
+// 本机状态采样（仪表盘主题用）：CPU（总体 + 每个核心）、内存、网络吞吐、系统盘、开机时长、进程数、电池。
+// 只在有页面请求时每秒采一次，只发给请求的壁纸窗口；只有数字，不含机器名、用户名、进程名，不写日志、不外发。
+static class SystemStats
+{
+    static readonly HashSet<WallpaperForm> subs = new HashSet<WallpaperForm>();
+    static System.Windows.Forms.Timer timer;
+    static long[] lastIdle, lastTotal;
+    static long lastRx = -1, lastTx = -1;
+    static int lastNetAt, tick, procs = -1;
+    static double diskTotal, diskFree;
+    static bool failedOnce;
+    // 最近 15 分钟的采样：页面重新载入、换主题再换回来、多一块屏幕时，图表不用从空白开始
+    const int HistoryMax = 900;
+    static readonly List<Dictionary<string, object>> history = new List<Dictionary<string, object>>();
+    static DateTime stoppedAt = DateTime.MinValue;
+
+    public static void Subscribe(WallpaperForm f)
+    {
+        subs.Add(f);
+        if (timer == null && (DateTime.Now - stoppedAt).TotalSeconds > 10) history.Clear();   // 停了太久，旧数据接不上
+        if (history.Count > 0)
+        {
+            try { f.Post(Json.Stringify(Json.Obj("t", "statsHist", "list", history))); } catch { }
+        }
+        if (timer != null) return;
+        timer = new System.Windows.Forms.Timer();
+        timer.Interval = 1000;
+        timer.Tick += delegate { Sample(); };
+        timer.Start();
+        Sample();
+        Log.Write("开始采样系统状态（仪表盘主题）");
+    }
+
+    public static void Unsubscribe(WallpaperForm f)
+    {
+        subs.Remove(f);
+        if (subs.Count > 0 || timer == null) return;
+        timer.Stop(); timer.Dispose(); timer = null;
+        lastIdle = lastTotal = null; lastRx = lastTx = -1; tick = 0; procs = -1;
+        stoppedAt = DateTime.Now;
+        Log.Write("停止采样系统状态");
+    }
+
+    static void Sample()
+    {
+        string json;
+        try
+        {
+            var d = Collect();
+            json = Json.Stringify(d);
+            history.Add(d);
+            if (history.Count > HistoryMax) history.RemoveRange(0, history.Count - HistoryMax);
+        }
+        catch (Exception ex)
+        {
+            if (!failedOnce) { failedOnce = true; Log.Write("读取系统状态失败：" + ex.Message); }
+            return;
+        }
+        foreach (var f in new List<WallpaperForm>(subs)) f.Post(json);
+    }
+
+    static Dictionary<string, object> Collect()
+    {
+        var d = Json.Obj("t", "stats");
+        double[] cores = CoreLoads();
+        if (cores != null && cores.Length > 0)
+        {
+            double sum = 0;
+            foreach (double c in cores) sum += c;
+            d["cpu"] = Math.Round(sum / cores.Length, 1);
+            d["cores"] = cores;
+        }
+        var ms = new Native.MEMORYSTATUSEX();
+        ms.dwLength = (uint)Marshal.SizeOf(typeof(Native.MEMORYSTATUSEX));
+        if (Native.GlobalMemoryStatusEx(ref ms) && ms.ullTotalPhys > 0)
+        {
+            double total = ms.ullTotalPhys, used = ms.ullTotalPhys - ms.ullAvailPhys;
+            d["memTotal"] = total; d["memUsed"] = used; d["mem"] = Math.Round(100 * used / total, 1);
+        }
+        // 网络：所有在用的物理 / 无线网卡收发字节数的差值（字节 / 秒）
+        long rx = 0, tx = 0;
+        foreach (var ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (ni.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) continue;
+            var type = ni.NetworkInterfaceType;
+            if (type == System.Net.NetworkInformation.NetworkInterfaceType.Loopback || type == System.Net.NetworkInformation.NetworkInterfaceType.Tunnel) continue;
+            try { var st = ni.GetIPStatistics(); rx += st.BytesReceived; tx += st.BytesSent; } catch { }
+        }
+        int now = Environment.TickCount;
+        if (lastRx >= 0)
+        {
+            double dt = Math.Max(0.2, unchecked(now - lastNetAt) / 1000.0);
+            d["rx"] = Math.Round(Math.Max(0, (rx - lastRx) / dt)); d["tx"] = Math.Round(Math.Max(0, (tx - lastTx) / dt));
+        }
+        lastRx = rx; lastTx = tx; lastNetAt = now;
+        // 系统盘、进程数：变化慢，隔几秒读一次
+        if (tick % 10 == 0)
+        {
+            try { var di = new DriveInfo(Path.GetPathRoot(Environment.SystemDirectory)); diskTotal = di.TotalSize; diskFree = di.TotalFreeSpace; } catch { }
+        }
+        if (tick % 5 == 0)
+        {
+            try { Process[] list = Process.GetProcesses(); procs = list.Length; foreach (var p in list) p.Dispose(); } catch { }
+        }
+        tick++;
+        if (diskTotal > 0) { d["diskTotal"] = diskTotal; d["diskUsed"] = diskTotal - diskFree; }
+        if (procs >= 0) d["procs"] = procs;
+        d["up"] = (double)(Native.GetTickCount64() / 1000);
+        var power = SystemInformation.PowerStatus;
+        if ((power.BatteryChargeStatus & BatteryChargeStatus.NoSystemBattery) == 0 && power.BatteryLifePercent >= 0 && power.BatteryLifePercent <= 1)
+        {
+            d["bat"] = Math.Round(power.BatteryLifePercent * 100);
+            d["ac"] = power.PowerLineStatus == PowerLineStatus.Online;
+        }
+        return d;
+    }
+
+    // 每个核心的占用（%）：NtQuerySystemInformation(SystemProcessorPerformanceInformation)，两次采样的差值
+    static double[] CoreLoads()
+    {
+        const int SZ = 48;                               // SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION（含对齐）
+        int n = Math.Max(1, Environment.ProcessorCount);
+        IntPtr buf = Marshal.AllocHGlobal(SZ * n);
+        try
+        {
+            int ret;
+            if (Native.NtQuerySystemInformation(8, buf, SZ * n, out ret) != 0) return null;
+            n = Math.Min(n, ret / SZ);
+            var idle = new long[n];
+            var total = new long[n];
+            for (int i = 0; i < n; i++)
+            {
+                long id = Marshal.ReadInt64(buf, i * SZ), kernel = Marshal.ReadInt64(buf, i * SZ + 8), user = Marshal.ReadInt64(buf, i * SZ + 16);
+                idle[i] = id; total[i] = kernel + user;          // 内核时间里包含空闲时间
+            }
+            double[] r = null;
+            if (lastIdle != null && lastIdle.Length == n)
+            {
+                r = new double[n];
+                for (int i = 0; i < n; i++)
+                {
+                    long dt = total[i] - lastTotal[i], di = idle[i] - lastIdle[i];
+                    r[i] = dt > 0 ? Math.Round(100 * Math.Max(0, Math.Min(1, 1 - (double)di / dt)), 1) : 0;
+                }
+            }
+            lastIdle = idle; lastTotal = total;
+            return r;
+        }
+        finally { Marshal.FreeHGlobal(buf); }
+    }
+}
+
 static class Native
 {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MEMORYSTATUSEX
+    {
+        public uint dwLength, dwMemoryLoad;
+        public ulong ullTotalPhys, ullAvailPhys, ullTotalPageFile, ullAvailPageFile, ullTotalVirtual, ullAvailVirtual, ullAvailExtendedVirtual;
+    }
+    [DllImport("kernel32.dll")] public static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX m);
+    [DllImport("kernel32.dll")] public static extern ulong GetTickCount64();
+    [DllImport("ntdll.dll")] public static extern int NtQuerySystemInformation(int cls, IntPtr buf, int len, out int retLen);
     public const int GWL_STYLE = -16, GWL_EXSTYLE = -20, WS_EX_LAYERED = 0x00080000;
     public const int WS_EX_TOOLWINDOW = 0x00000080, WS_EX_TRANSPARENT = 0x00000020, WS_EX_NOACTIVATE = 0x08000000;
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);

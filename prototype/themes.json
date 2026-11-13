@@ -574,6 +574,141 @@
       ]
     },
     {
+      "id": "ast",
+      "name": "语法树",
+      "desc": "图标是抽象语法树的节点，树枝从上往下分叉；解析器按顺序一个个点亮节点，多个显示器挂在同一个 Program 下",
+      "page": "ast.html",
+      "status": "ready",
+      "product": "free",
+      "thumb": "radial-gradient(circle 4px at 50% 18%, #d9480f 0 3px, transparent 3.5px), linear-gradient(#fffdf8, #fffdf8) 50% 16% / 22% 12% no-repeat, linear-gradient(#fffdf8, #fffdf8) 22% 48% / 18% 12% no-repeat, linear-gradient(#fffdf8, #fffdf8) 78% 48% / 18% 12% no-repeat, linear-gradient(#fffdf8, #fffdf8) 10% 80% / 16% 12% no-repeat, linear-gradient(#fffdf8, #fffdf8) 36% 80% / 16% 12% no-repeat, linear-gradient(#fde3d6, #fde3d6) 78% 80% / 18% 12% no-repeat, linear-gradient(160deg, transparent 49.4%, #c8bfac 49.6% 50.4%, transparent 50.6%) 36% 32% / 28% 22% no-repeat, linear-gradient(20deg, transparent 49.4%, #c8bfac 49.6% 50.4%, transparent 50.6%) 64% 32% / 28% 22% no-repeat, linear-gradient(#c8bfac, #c8bfac) 78% 64% / 1px 20% no-repeat, linear-gradient(145deg, transparent 49%, #c8bfac 49.5% 50.5%, transparent 51%) 16% 64% / 14% 20% no-repeat, linear-gradient(35deg, transparent 49%, #c8bfac 49.5% 50.5%, transparent 51%) 30% 64% / 14% 20% no-repeat, #f6f3ec",
+      "groups": [
+        {
+          "name": "画面",
+          "params": [
+            {
+              "key": "palette",
+              "label": "配色",
+              "hint": "纸张、深色石板或蓝图",
+              "options": [
+                "纸张",
+                "石板",
+                "蓝图"
+              ],
+              "default": 0
+            },
+            {
+              "key": "density",
+              "label": "分支密度",
+              "hint": "空地上长出多少小节点",
+              "min": 0,
+              "max": 1,
+              "step": 0.01,
+              "default": 0.6,
+              "format": "percent"
+            },
+            {
+              "key": "values",
+              "label": "显示名字和值",
+              "hint": "在 Identifier、Literal 节点上显示名字和值",
+              "options": [
+                "隐藏",
+                "显示"
+              ],
+              "default": 1
+            }
+          ]
+        },
+        {
+          "name": "解析",
+          "params": [
+            {
+              "key": "speed",
+              "label": "解析速度",
+              "hint": "解析器点亮节点有多快",
+              "min": 0.25,
+              "max": 3,
+              "step": 0.05,
+              "default": 1,
+              "format": "times"
+            },
+            {
+              "key": "strip",
+              "label": "源码条",
+              "hint": "底部和解析同步高亮的一行词",
+              "options": [
+                "隐藏",
+                "显示"
+              ],
+              "default": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dashboard",
+      "name": "监控仪表盘",
+      "desc": "这台电脑的实时 CPU、核心热力图、内存、网络和磁盘铺满空地；负载升高时图标告警由绿转黄再转红",
+      "page": "dashboard.html",
+      "status": "ready",
+      "product": "free",
+      "thumb": "linear-gradient(#0b0c0e, #0b0c0e) 0 0 / 100% 12% no-repeat, linear-gradient(150deg, transparent 45%, #73bf69 46% 48%, transparent 49%) 6% 30% / 44% 30% no-repeat, linear-gradient(#181b1f, #181b1f) 6% 34% / 44% 38% no-repeat, radial-gradient(circle 18px at 72% 40%, #181b1f 0 11px, #73bf69 11.5px 16px, #181b1f 16.5px 22px, transparent 22.5px), linear-gradient(#181b1f, #181b1f) 94% 34% / 40% 38% no-repeat, linear-gradient(90deg, #2c4f8f, #5794f2, #fade2a, #5794f2, #2c4f8f) 6% 92% / 44% 22% no-repeat, linear-gradient(#181b1f, #181b1f) 94% 92% / 40% 22% no-repeat, linear-gradient(#5794f2, #5794f2) 76% 86% / 18% 5% no-repeat, #111217",
+      "groups": [
+        {
+          "name": "面板",
+          "params": [
+            {
+              "key": "palette",
+              "label": "配色",
+              "hint": "深色或浅色面板",
+              "options": [
+                "深色",
+                "浅色"
+              ],
+              "default": 0
+            },
+            {
+              "key": "range",
+              "label": "时间范围",
+              "hint": "曲线和热力图显示最近多长时间",
+              "options": [
+                "1 分钟",
+                "5 分钟",
+                "15 分钟"
+              ],
+              "default": 1
+            },
+            {
+              "key": "refresh",
+              "label": "刷新间隔",
+              "hint": "面板多久重画一次；越长越省电",
+              "options": [
+                "1 秒",
+                "2 秒",
+                "5 秒"
+              ],
+              "default": 0
+            }
+          ]
+        },
+        {
+          "name": "告警",
+          "params": [
+            {
+              "key": "alerts",
+              "label": "图标告警",
+              "hint": "图标边框随 CPU 和内存负载从绿变黄再变红",
+              "options": [
+                "关闭",
+                "开启"
+              ],
+              "default": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "beach-turquoise",
       "name": "马尔代夫",
       "desc": "青绿色海水与浅米黄沙滩，暗色珊瑚礁间的小鱼成群游动",
