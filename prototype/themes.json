@@ -175,6 +175,104 @@
       ]
     },
     {
+      "id": "space",
+      "adaptive": true,
+      "name": "太空",
+      "desc": "图标周围聚起发光的星云和星团，行星停在空旷的深空里，流星和火箭不时划过",
+      "page": "space.html",
+      "status": "ready",
+      "product": "free",
+      "thumb": "url(thumbs/space.webp?v=dc5e674808) center / cover no-repeat, radial-gradient(ellipse 30% 40% at 22% 45%, #7a3fb0 0%, #3b2a7a 45%, transparent 75%), radial-gradient(circle at 74% 38%, #e2be86 0 9%, transparent 10%), linear-gradient(160deg, #0d1030 0%, #04050d 100%)",
+      "thumbSource": "custom",
+      "groups": [
+        {
+          "name": "图标周围",
+          "params": [
+            {
+              "key": "sigma",
+              "label": "星云范围",
+              "hint": "图标周围的星云从图标往外铺多远",
+              "min": 40,
+              "max": 220,
+              "step": 1,
+              "default": 90,
+              "unit": "px"
+            },
+            {
+              "key": "glow",
+              "label": "星云亮度",
+              "hint": "星云发光有多亮，0 只剩星星",
+              "min": 0,
+              "max": 1,
+              "step": 0.01,
+              "default": 0.7,
+              "format": "percent"
+            }
+          ]
+        },
+        {
+          "name": "星空",
+          "params": [
+            {
+              "key": "stars",
+              "label": "星星密度",
+              "hint": "背景里星星和闪烁的亮星有多少",
+              "min": 0,
+              "max": 2,
+              "step": 0.05,
+              "default": 1,
+              "format": "times"
+            },
+            {
+              "key": "flow",
+              "label": "动画速度",
+              "hint": "星星闪烁、卫星公转和飞船飞行有多快",
+              "min": 0,
+              "max": 3,
+              "step": 0.05,
+              "default": 1,
+              "format": "times"
+            }
+          ]
+        },
+        {
+          "name": "元素",
+          "params": [
+            {
+              "key": "planets",
+              "label": "行星",
+              "hint": "停在空旷处的行星数量，设为 0 可隐藏；空地不够时会减少显示",
+              "min": 0,
+              "max": 3,
+              "step": 1,
+              "default": 2,
+              "unit": "颗"
+            },
+            {
+              "key": "meteors",
+              "label": "流星",
+              "hint": "流星划过的频率，设为 0 可隐藏",
+              "min": 0,
+              "max": 5,
+              "step": 1,
+              "default": 2,
+              "unit": ""
+            },
+            {
+              "key": "ships",
+              "label": "飞船",
+              "hint": "慢慢飞过屏幕的火箭和人造卫星",
+              "min": 0,
+              "max": 3,
+              "step": 1,
+              "default": 1,
+              "unit": "艘"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "beach-turquoise",
       "name": "马尔代夫",
       "desc": "青绿色海水与浅米黄沙滩，暗色珊瑚礁间的小鱼成群游动",

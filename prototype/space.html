@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deskland · 太空（原型）</title>
+<!--
+  Deskland · 太空主题（俯看星空；Canvas 2D）
+  - 图标周围聚起一片发光的星云，星星也更密，像一个个星团；空旷的地方是深空、银河的淡带
+  - 行星停在离图标最远的空地上，图标移动后平滑地挪过去；每颗行星带一颗小卫星绕着转
+  - 流星偶尔划过；火箭、卫星慢慢飞过屏幕
+  性能：星云、暗星、颗粒全部画进静态缓存（图标变了才重画，新旧两张交叉淡入淡出）；
+  每帧只贴一张缓存，再画几十颗闪烁的星、行星精灵图和几个小物体
+-->
+<style>
+  :root { --taskbar: 48px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #070918; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif; }
+  #art { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #desktop { position: fixed; left: 0; top: 0; right: 0; bottom: var(--taskbar); }
+
+  .icon {
+    position: absolute; width: 76px; padding: 4px 2px 5px;
+    display: flex; flex-direction: column; align-items: center;
+    border: 1px solid transparent; border-radius: 4px;
+    user-select: none; touch-action: none; cursor: default;
+  }
+  .icon:hover { background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.2); }
+  .icon.drag { opacity: .88; z-index: 10; transform: scale(1.04); }
+  .icon.settle { transition: left .22s cubic-bezier(.2,.8,.3,1), top .22s cubic-bezier(.2,.8,.3,1); }
+  .glyph { width: 48px; height: 48px; border-radius: 10px; display: grid; place-items: center; color: #fff;
+    font-size: 21px; font-weight: 700; box-shadow: 0 2px 6px rgba(0,0,0,.35); pointer-events: none; }
+  .label {
+    margin-top: 3px; max-width: 72px; font-size: 12px; line-height: 15px; color: #fff; text-align: center;
+    text-shadow: 0 0 2px rgba(0,0,0,.95), 0 1px 3px rgba(0,0,0,.85);
+    word-break: break-all; overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; pointer-events: none;
+  }
+  #taskbar {
+    position: fixed; left: 0; right: 0; bottom: 0; height: var(--taskbar);
+    background: rgba(20,22,30,.62); backdrop-filter: blur(28px) saturate(1.6); -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    border-top: 1px solid rgba(255,255,255,.08); z-index: 40;
+  }
+  #hint {
+    position: fixed; top: 14px; right: 14px; padding: 10px 14px; border-radius: 10px; z-index: 50;
+    background: rgba(16,18,40,.72); color: #e6e8ff; font-size: 12px; line-height: 1.6;
+    border: 1px solid rgba(255,255,255,.14); backdrop-filter: blur(16px);
+  }
+  #hint.hidden { display: none; }
+  /* 壁纸模式（?wallpaper=1）：真实图标和任务栏由 Windows 自己画 */
+  body.wall #desktop, body.wall #taskbar, body.wall #hint { display: none; }
+  /* 预览模式（?preview=1）：用半透明的方块示意真实图标的位置 */
+  #ghosts { position: fixed; inset: 0; pointer-events: none; display: none; }
+  body.preview #ghosts { display: block; }
+  .ghost { position: absolute; }
+  .ghost i { position: absolute; left: 50%; top: 4px; width: 48px; height: 48px; margin-left: -24px; border-radius: 9px;
+    background: rgba(255,255,255,.88); box-shadow: 3px 6px 8px rgba(0,0,0,.35); }
+  .ghost b { position: absolute; left: 14%; right: 14%; top: 60px; height: 10px; border-radius: 5px; background: rgba(255,255,255,.75); }
+</style>
+</head>
+<body>
+<canvas id="art"></canvas>
+<div id="desktop"></div>
+<div id="taskbar"></div>
+<div id="hint"><b>Deskland · 太空</b><br>拖动图标，星云和行星会跟着调整<br>R 换一张 · H 隐藏提示</div>
+
+<script>
+'use strict';
+
+/* ======================================================================
+   参数（默认值和 themes.json 里太空主题的 default 保持一致）
+   ====================================================================== */
+const CELL_W = 76, CELL_H = 100, GRID_X0 = 4, GRID_Y0 = 6, TASKBAR = 48;
+const FS = 4;                 // 星云场的格子边长（CSS 像素），放大贴图时平滑
+const MORPH_MS = 1600;        // 图标变化后新旧画面交叉淡入的时长
+
+const QS = new URLSearchParams(location.search);
+const WALL = QS.has('wallpaper');
+const PREVIEW = QS.has('preview');
+const STILL = QS.has('still');          // 调试 / 截缩略图：不做淡入淡出，直接是最终画面
+const P = { sigma: 90, glow: 0.7, stars: 1, flow: 1, planets: 2, meteors: 2, ships: 1, adaptive: 1 };
+const DEFAULTS = Object.assign({}, P);
+const LIMITS = { sigma: [40, 220], glow: [0, 1], stars: [0, 2], flow: [0, 3], planets: [0, 3], meteors: [0, 5], ships: [0, 3], adaptive: [0, 1] };
+const INTS = new Set(['sigma', 'planets', 'meteors', 'ships', 'adaptive']);
+
+const cv = document.getElementById('art');
+const ctx = cv.getContext('2d', { alpha: false });
+let W = innerWidth, H = innerHeight;
+let icons = [];
+let seed = QS.has('seed') ? (+QS.get('seed') | 0) : (Math.random() * 1e6) | 0;   // ?seed= 方便调试时固定画面
+
+/* ======================================================================
+   噪声
+   ====================================================================== */
+function hash2(x, y, k) {
+  let h = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ Math.imul((seed + k) | 0, 2246822519);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function vnoise(x, y, k) {
+  const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+  const a = hash2(xi, yi, k), b = hash2(xi + 1, yi, k), c = hash2(xi, yi + 1, k), d = hash2(xi + 1, yi + 1, k);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+function fbm(x, y, k, oct) {
+  let s = 0, a = 0.5, n = 0;
+  for (let o = 0; o < oct; o++) { s += a * vnoise(x, y, k + o * 17); n += a; x = x * 2.03 + 17.1; y = y * 2.03 - 9.7; a *= 0.5; }
+  return s / n;
+}
+function mulberry32(a) {
+  return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const ease = t => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+
+/* ======================================================================
+   星云场：噪声按种子和屏幕大小算一次；图标变了只重算"图标密度"再合成颜色
+   ====================================================================== */
+let Gw = 0, Gh = 0, nShape, nWisp, nDust, nHue, nBand, dens;
+let starCand = [], twinkles = [];
+const fCur = { cv: document.createElement('canvas'), stars: [] };     // 当前的星云（低分辨率）和星星
+const fEmpty = { cv: document.createElement('canvas'), stars: [] };   // 没有图标时的样子（开场从它长出来）
+
+function buildNoise() {
+  Gw = Math.ceil(W / FS) + 2; Gh = Math.ceil(H / FS) + 2;
+  const N = Gw * Gh;
+  nShape = new Float32Array(N); nWisp = new Float32Array(N); nDust = new Float32Array(N);
+  nHue = new Float32Array(N); nBand = new Float32Array(N); dens = new Float32Array(N);
+  const r = mulberry32(seed ^ 0x51ab);
+  const ang = (r() - 0.5) * 1.2 + (r() < 0.5 ? 0.6 : -0.6);           // 银河的方向
+  const bx = Math.cos(ang), by = Math.sin(ang), ox = W * (0.3 + 0.4 * r()), oy = H * (0.3 + 0.4 * r());
+  const bw = 0.13 * Math.hypot(W, H);
+  for (let j = 0, k = 0; j < Gh; j++) for (let i = 0; i < Gw; i++, k++) {
+    const x = i * FS, y = j * FS;
+    const s = fbm(x / 230, y / 230, 11, 4);
+    nShape[k] = s;
+    const wx = x / 380 + (s - 0.5) * 1.8, wy = y / 380 + (fbm(x / 260 + 40, y / 260, 23, 3) - 0.5) * 1.8;
+    nWisp[k] = fbm(wx, wy, 31, 4);
+    nDust[k] = fbm(x / 150, y / 150, 47, 3);
+    nHue[k] = fbm(x / 560, y / 560, 59, 2);
+    const d = (x - ox) * by - (y - oy) * bx;                            // 到银河中线的距离
+    nBand[k] = Math.exp(-d * d / (2 * bw * bw)) * smooth(0.3, 0.75, nWisp[k]);
+  }
+  for (const f of [fCur, fEmpty]) { f.cv.width = Gw; f.cv.height = Gh; f.img = f.cv.getContext('2d').createImageData(Gw, Gh); }
+  // 候选星星：位置固定（同一个种子），按星云疏密决定显示哪些——图标移动时大部分星星不动
+  starCand = [];
+  const n = Math.round(W * H / 480);
+  for (let i = 0; i < n; i++) {
+    const t = r();
+    starCand.push({ x: r() * W, y: r() * H, u: r(), b: 0.3 + 0.7 * r() * r(), s: 0.7 + r() * r() * 1.1,
+      tint: t < 0.62 ? 0 : t < 0.86 ? 1 : 2, big: r() < 0.035 });
+  }
+  starCand.sort((a, b) => a.tint - b.tint);
+  twinkles = [];
+  for (let i = 0; i < 72; i++) twinkles.push({ x: r() * W, y: r() * (H - TASKBAR), ph: r() * 6.283, sp: 0.6 + 1.8 * r(), size: 7 + r() * r() * 12, tint: r() < 0.7 ? 0 : r() < 0.5 ? 1 : 2 });
+}
+
+function computeDensity() {
+  dens.fill(0);
+  const s = P.sigma, inv = 1 / (2 * s * s), R = 3 * s, R2 = R * R;
+  for (const ic of icons) {
+    const cx = ic.x + ic.w / 2, cy = ic.y + ic.h / 2, hw = ic.w * 0.32, hh = ic.h * 0.32;
+    const i0 = Math.max(0, Math.floor((cx - hw - R) / FS)), i1 = Math.min(Gw - 1, Math.ceil((cx + hw + R) / FS));
+    const j0 = Math.max(0, Math.floor((cy - hh - R) / FS)), j1 = Math.min(Gh - 1, Math.ceil((cy + hh + R) / FS));
+    for (let j = j0; j <= j1; j++) {
+      const dy = Math.max(Math.abs(j * FS - cy) - hh, 0), dy2 = dy * dy;
+      if (dy2 > R2) continue;
+      for (let i = i0, k = j * Gw + i0; i <= i1; i++, k++) {
+        const dx = Math.max(Math.abs(i * FS - cx) - hw, 0), dd = dx * dx + dy2;
+        if (dd < R2) dens[k] += Math.exp(-dd * inv);
+      }
+    }
+  }
+}
+
+const TEAL = [0.12, 0.62, 0.80], VIOLET = [0.40, 0.24, 0.82], MAGENTA = [0.80, 0.24, 0.62], PALE = [0.96, 0.88, 1.0];
+const TOP = [0.050, 0.058, 0.150], BOT = [0.012, 0.016, 0.050];
+// 合成一张星云（低分辨率，每格 FS 像素）并挑出这张里显示的星星
+function composeField(f, useIcons) {
+  // useIcons=false：同样的星空，只是图标周围还没有星云（开场从它慢慢长出来）
+  const data = f.img.data, adapt = P.adaptive === 1, withIcons = useIcons && adapt, g = P.glow;
+  for (let j = 0, k = 0; j < Gh; j++) {
+    const y = j * FS, by = clamp(y / H, 0, 1);
+    for (let i = 0; i < Gw; i++, k++) {
+      const x = i * FS, bx = clamp(x / W, 0, 1);
+      const n = withIcons ? 1 - Math.exp(-1.3 * dens[k]) : 0;
+      const neb = smooth(0.12, 1.1, n * (0.3 + nShape[k] * 1.4)) * (0.35 + 0.95 * nWisp[k]);
+      const wisp = smooth(0.58, 0.92, nWisp[k]) * (adapt ? 0.2 : 0.6);
+      const band = nBand[k] * (adapt ? 0.26 : 0.42);
+      let t = 1 - (1 - Math.min(neb, 1)) * (1 - wisp) * (1 - band);
+      t *= 1 - 0.55 * smooth(0.5, 0.82, nDust[k]) * smooth(0.1, 0.5, t);   // 柔和的暗尘
+      t *= g;
+      const h = smooth(0.32, 0.68, nHue[k]);
+      const A = h < 0.5 ? TEAL : VIOLET, B = h < 0.5 ? VIOLET : MAGENTA, m = h < 0.5 ? h * 2 : (h - 0.5) * 2;
+      const core = smooth(0.55, 1.0, t) * 0.35;
+      const v = 1 - 0.55 * ((bx - 0.5) * (bx - 0.5) + (by - 0.5) * (by - 0.5));   // 暗角
+      const gy = by * 0.8 + bx * 0.2;
+      const o = k * 4, dz = (hash2(i, j, 77) - 0.5) * 1.6;
+      for (let c = 0; c < 3; c++) {
+        const col = (A[c] + (B[c] - A[c]) * m) * (1 - core) + PALE[c] * core;
+        const base = (TOP[c] + (BOT[c] - TOP[c]) * gy) * v;
+        data[o + c] = (1 - (1 - base) * (1 - Math.min(1, col * t))) * 255 + dz;
+      }
+      data[o + 3] = 255;
+    }
+  }
+  f.cv.getContext('2d').putImageData(f.img, 0, 0);
+  // 星星：基础的一层 + 星云里（星团）和银河里更密
+  const stars = [], sp = P.stars;
+  for (const st of starCand) {
+    const k = clamp(Math.round(st.y / FS), 0, Gh - 1) * Gw + clamp(Math.round(st.x / FS), 0, Gw - 1);
+    const d = withIcons ? Math.min(1, dens[k]) : 0;
+    if (st.u < (0.16 + 0.6 * d + 0.5 * nBand[k]) * sp) stars.push(st);
+  }
+  f.stars = stars;
+}
+
+/* ======================================================================
+   精灵图和静态缓存
+   ====================================================================== */
+const TINTS = ['255,255,255', '200,220,255', '255,226,196'];
+function sprite(size, f) { const c = document.createElement('canvas'); c.width = c.height = size; f(c.getContext('2d'), size); return c; }
+const glowSprites = TINTS.map(t => sprite(64, (c, s) => {
+  const g = c.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+  g.addColorStop(0, `rgba(${t},1)`); g.addColorStop(0.12, `rgba(${t},0.85)`); g.addColorStop(0.3, `rgba(${t},0.22)`); g.addColorStop(1, `rgba(${t},0)`);
+  c.fillStyle = g; c.fillRect(0, 0, s, s);
+}));
+const flareSprites = TINTS.map((t, i) => sprite(96, (c, s) => {
+  c.drawImage(glowSprites[i], s * 0.3, s * 0.3, s * 0.4, s * 0.4);
+  for (const [w, h] of [[s, 1.6], [1.6, s]]) {
+    const g = w > h ? c.createLinearGradient(0, 0, s, 0) : c.createLinearGradient(0, 0, 0, s);
+    g.addColorStop(0, `rgba(${t},0)`); g.addColorStop(0.5, `rgba(${t},0.9)`); g.addColorStop(1, `rgba(${t},0)`);
+    c.fillStyle = g; c.fillRect((s - w) / 2, (s - h) / 2, w, h);
+  }
+}));
+const grainTile = sprite(128, (c, s) => {
+  const im = c.createImageData(s, s), r = mulberry32(7);
+  for (let i = 0; i < im.data.length; i += 4) { const v = 128 + (r() - 0.5) * 90; im.data[i] = im.data[i + 1] = im.data[i + 2] = v; im.data[i + 3] = 255; }
+  c.putImageData(im, 0, 0);
+});
+
+// 三张全屏缓存轮换：cur（现在的）、old（正在淡出的）、第三张备用
+const L = [0, 1, 2].map(() => document.createElement('canvas'));
+let cur = 0, old = -1, morphT0 = 0, cacheOK = false;
+function renderCache(dst, f) {
+  dst.width = cv.width; dst.height = cv.height;
+  const c = dst.getContext('2d', { alpha: false }), s = cv._scale;
+  c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'high';
+  c.drawImage(f.cv, 0, 0, Gw, Gh, 0, 0, Gw * FS * s, Gh * FS * s);
+  c.globalCompositeOperation = 'overlay'; c.globalAlpha = 0.06;          // 一层细颗粒，去掉暗部的色带
+  c.fillStyle = c.createPattern(grainTile, 'repeat'); c.fillRect(0, 0, dst.width, dst.height);
+  c.globalCompositeOperation = 'source-over';
+  c.setTransform(s, 0, 0, s, 0, 0);
+  let tint = -1;
+  for (const st of f.stars) {
+    if (st.big) continue;
+    if (st.tint !== tint) { tint = st.tint; c.fillStyle = `rgb(${TINTS[tint]})`; }
+    c.globalAlpha = st.b;
+    const z = Math.max(st.s, 1 / s);
+    c.fillRect(st.x - z / 2, st.y - z / 2, z, z);
+  }
+  for (const st of f.stars) {
+    if (!st.big) continue;
+    const z = 9 + st.s * 6;
+    c.globalAlpha = 0.55 + 0.45 * st.b;
+    c.drawImage(glowSprites[st.tint], st.x - z / 2, st.y - z / 2, z, z);
+  }
+  c.setTransform(1, 0, 0, 1, 0, 0); c.globalAlpha = 1;
+}
+function morphE(now) { return old < 0 ? 1 : Math.min(1, (now - morphT0) / MORPH_MS); }
+function flatten(dst, now) {                       // 把屏幕上现在的样子（新旧混合中）拍成一张，作为下一次淡出的起点
+  dst.width = cv.width; dst.height = cv.height;
+  const c = dst.getContext('2d', { alpha: false });
+  c.drawImage(L[cur], 0, 0);
+  c.globalAlpha = 1 - ease(morphE(now)); c.drawImage(L[old], 0, 0); c.globalAlpha = 1;
+}
+
+/* ======================================================================
+   图标变化 → 重算星云，交叉淡入；行星重新找空地
+   fromEmpty：从没有图标的星空开始长出来（开场、换一张）
+   ====================================================================== */
+let iconsSeen = !(WALL || PREVIEW);
+function commit(fromEmpty) {
+  const now = performance.now();
+  computeDensity();
+  composeField(fCur, true);
+  let from = -1;
+  if (fromEmpty) {
+    composeField(fEmpty, false);
+    from = cur === 0 ? 1 : 0; renderCache(L[from], fEmpty);
+  } else if (cacheOK && old >= 0 && morphE(now) < 1) {
+    from = [0, 1, 2].find(i => i !== cur && i !== old); flatten(L[from], now);
+  } else if (cacheOK) from = cur;
+  cur = [0, 1, 2].find(i => i !== from);
+  renderCache(L[cur], fCur);
+  old = STILL ? -1 : from; morphT0 = now; cacheOK = true;
+  if (iconsSeen) planPlanets(fromEmpty);
+  if (STILL) for (const pl of planets) pl.a = pl.ta;
+  if (paused) { old = -1; draw(now); }           // 暂停中也把静态画面更新好（恢复后不必等）
+}
+
+/* ======================================================================
+   行星：放在离图标、屏幕边、别的行星都最远的地方
+   ====================================================================== */
+const STYLES = ['ringed', 'ocean', 'rocky', 'ice'];
+let planets = [];
+function rectGap(ic, x, y) {
+  const dx = Math.max(ic.x - x, 0, x - ic.x - ic.w), dy = Math.max(ic.y - y, 0, y - ic.y - ic.h);
+  return Math.hypot(dx, dy);
+}
+function planPlanets(instant) {
+  const n = P.planets, adapt = P.adaptive === 1, DH = H - TASKBAR;
+  const rs = mulberry32(seed * 7 + 13);
+  const order = STYLES.slice(); for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(rs() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+  if (order[0] !== 'ringed' && rs() < 0.6) order.splice(order.indexOf('ringed'), 1), order.unshift('ringed');
+  const base = Math.min(W, DH), sizes = [0.075, 0.05, 0.036].map(f => f * base);
+  const cands = [];
+  for (let y = 30; y < DH - 20; y += 22) for (let x = 30; x < W - 20; x += 22) {
+    let clr = 1e9;
+    if (adapt) for (const ic of icons) { const g = rectGap(ic, x, y); if (g < clr) clr = g; }
+    cands.push([x, y, clr]);
+  }
+  const chosen = [], placed = new Set();
+  for (let p = 0; p < n; p++) {
+    const style = order[p], prev = planets.find(q => q.slot === p && q.ta > 0);
+    let best = null;
+    for (const shrink of [1, 0.8, 0.62]) {
+      const R = sizes[p] * shrink, ext = R * (style === 'ringed' ? 2.15 : 1.75);
+      for (const [x, y, iconClr] of cands) {
+        let clr = Math.min(iconClr - ext - 26, x - ext + 12, W - x - ext + 12, y - ext + 12, DH - y - ext);
+        for (const c of chosen) clr = Math.min(clr, Math.hypot(c.x - x, c.y - y) - ext - c.ext - 36);
+        if (clr < 0) continue;
+        let score = Math.min(clr, 140) + hash2(x, y, 300 + p) * 90;
+        if (prev) score += 80 * Math.exp(-Math.hypot(prev.tx - x, prev.ty - y) / 160);   // 尽量别跳来跳去
+        if (!best || score > best.score) best = { x, y, R, ext, score };
+      }
+      if (best) break;
+    }
+    if (!best) continue;
+    chosen.push(best); placed.add(p);
+    let pl = planets.find(q => q.slot === p);
+    if (pl && pl.style !== style) { pl.ta = 0; pl.slot = -1; pl = null; }
+    if (!pl) {
+      pl = { slot: p, style, x: best.x, y: best.y, r: best.R, a: 0, seed: rs() * 1e6 | 0, tilt: (rs() - 0.5) * 0.7,
+        moon: { ang: rs() * 6.28, sp: 0.18 + rs() * 0.16, size: 0.13 + rs() * 0.05 } };
+      planets.push(pl);
+    }
+    pl.tx = best.x; pl.ty = best.y; pl.tr = best.R; pl.ta = 1;
+    if (instant || pl.a < 0.01) { pl.x = best.x; pl.y = best.y; pl.r = best.R; }
+  }
+  for (const pl of planets) if (!placed.has(pl.slot)) pl.ta = 0;   // 多出来的、放不下的：淡出
+}
+
+// 行星精灵图：大气光晕、行星环（后半圈 / 前半圈）、表面花纹、明暗交界
+function renderPlanet(pl) {
+  const s = cv._scale, R = pl.tr, ext = R * (pl.style === 'ringed' ? 2.1 : 1.5);
+  const size = Math.max(4, Math.ceil(ext * 2 * s));
+  const c0 = pl.spr || document.createElement('canvas');
+  c0.width = c0.height = size;
+  const c = c0.getContext('2d'), r = mulberry32(pl.seed);
+  c.setTransform(s, 0, 0, s, ext * s, ext * s);
+  const PAL = {
+    ringed: { base: '#d8b07a', bands: ['#c48850', '#ecd3a2', '#b3754a', '#e2be86'], atm: '255,214,160' },
+    ocean: { base: '#2c6db8', bands: ['#4c9d63', '#7fb86b', '#d9c48c'], atm: '120,190,255' },
+    rocky: { base: '#c46440', bands: ['#a64a32', '#d98458', '#8f3e2c'], atm: '255,150,120' },
+    ice: { base: '#b9b4ec', bands: ['#9e98e0', '#d6d2fa', '#8a8ad6'], atm: '200,190,255' },
+  }[pl.style];
+  const halo = c.createRadialGradient(0, 0, R * 0.9, 0, 0, R * 1.45);
+  halo.addColorStop(0, `rgba(${PAL.atm},0.38)`); halo.addColorStop(1, `rgba(${PAL.atm},0)`);
+  c.fillStyle = halo; c.beginPath(); c.arc(0, 0, R * 1.45, 0, 6.2832); c.fill();
+  const ring = (a0, a1) => {
+    for (const [k, w, col] of [[1.42, R * 0.12, 'rgba(226,204,160,0.55)'], [1.62, R * 0.2, 'rgba(240,222,184,0.7)'], [1.86, R * 0.1, 'rgba(210,186,150,0.45)']]) {
+      c.beginPath(); c.ellipse(0, 0, R * k, R * k * 0.3, pl.tilt, a0, a1); c.lineWidth = w; c.strokeStyle = col; c.stroke();
+    }
+  };
+  if (pl.style === 'ringed') ring(Math.PI, Math.PI * 2);
+  c.save();
+  c.beginPath(); c.arc(0, 0, R, 0, 6.2832); c.clip();
+  c.fillStyle = PAL.base; c.fillRect(-R, -R, 2 * R, 2 * R);
+  c.rotate(pl.tilt);
+  if (pl.style === 'ringed' || pl.style === 'ice') {           // 气态行星：一条条波浪形的色带
+    let y = -R;
+    while (y < R) {
+      const h = R * (0.08 + r() * 0.2), amp = R * 0.03, ph = r() * 6.28;
+      c.fillStyle = PAL.bands[Math.floor(r() * PAL.bands.length)]; c.globalAlpha = pl.style === 'ice' ? 0.5 : 0.85;
+      c.beginPath(); c.moveTo(-R, y);
+      for (let x = -R; x <= R; x += R / 8) c.lineTo(x, y + Math.sin(x / R * 5 + ph) * amp);
+      for (let x = R; x >= -R; x -= R / 8) c.lineTo(x, y + h + Math.sin(x / R * 4 + ph) * amp);
+      c.fill(); y += h + R * r() * 0.12;
+    }
+    if (pl.style === 'ringed') { c.globalAlpha = 0.6; c.fillStyle = '#b0623e'; c.beginPath(); c.ellipse(R * 0.25, R * 0.3, R * 0.16, R * 0.08, 0, 0, 6.28); c.fill(); }
+  } else if (pl.style === 'ocean') {                           // 海洋行星：几块大陆和白云
+    for (let i = 0; i < 7; i++) {
+      c.fillStyle = PAL.bands[i % PAL.bands.length]; c.globalAlpha = 0.9;
+      const x = (r() - 0.5) * 1.8 * R, y = (r() - 0.5) * 1.6 * R;
+      c.beginPath();
+      for (let a = 0; a < 6.28; a += 0.5) { const rr = R * (0.15 + 0.2 * r()); c.lineTo(x + Math.cos(a) * rr * 1.3, y + Math.sin(a) * rr); }
+      c.fill();
+    }
+    c.fillStyle = '#ffffff';
+    for (let i = 0; i < 9; i++) { c.globalAlpha = 0.35 + 0.3 * r(); c.beginPath(); c.ellipse((r() - 0.5) * 2 * R, (r() - 0.5) * 1.8 * R, R * (0.2 + 0.35 * r()), R * 0.05, 0, 0, 6.28); c.fill(); }
+  } else {                                                     // 岩石行星：深浅斑块和环形山
+    for (let i = 0; i < 6; i++) { c.fillStyle = PAL.bands[i % PAL.bands.length]; c.globalAlpha = 0.6; c.beginPath(); c.ellipse((r() - 0.5) * 1.8 * R, (r() - 0.5) * 1.8 * R, R * (0.2 + 0.3 * r()), R * (0.12 + 0.2 * r()), r() * 3, 0, 6.28); c.fill(); }
+    for (let i = 0; i < 11; i++) {
+      const x = (r() - 0.5) * 1.8 * R, y = (r() - 0.5) * 1.8 * R, cr = R * (0.04 + 0.1 * r() * r());
+      c.globalAlpha = 0.3; c.fillStyle = '#5a2418'; c.beginPath(); c.arc(x, y, cr, 0, 6.28); c.fill();
+      c.globalAlpha = 0.35; c.strokeStyle = '#f0a07a'; c.lineWidth = cr * 0.25; c.beginPath(); c.arc(x + cr * 0.12, y + cr * 0.12, cr, 3.6, 5.8); c.stroke();
+    }
+  }
+  c.globalAlpha = 1; c.setTransform(s, 0, 0, s, ext * s, ext * s);
+  const sh = c.createRadialGradient(-R * 0.45, -R * 0.45, R * 0.1, -R * 0.2, -R * 0.2, R * 1.6);   // 光从左上方来
+  sh.addColorStop(0, 'rgba(255,255,255,0.22)'); sh.addColorStop(0.35, 'rgba(0,0,0,0)');
+  sh.addColorStop(0.68, 'rgba(8,6,30,0.55)'); sh.addColorStop(1, 'rgba(3,2,14,0.92)');
+  c.fillStyle = sh; c.fillRect(-R, -R, 2 * R, 2 * R);
+  c.restore();
+  c.beginPath(); c.arc(0, 0, R - 0.6, 3.3, 5.3); c.lineWidth = Math.max(1, R * 0.035); c.strokeStyle = `rgba(${PAL.atm},0.55)`; c.stroke();
+  if (pl.style === 'ringed') ring(0, Math.PI);
+  pl.spr = c0; pl.sprR = R; pl.sprS = s; pl.ext = ext;
+}
+function moonPos(pl) {
+  const a = pl.r * (pl.style === 'ringed' ? 2.0 : 1.55), b = a * 0.3, t = pl.moon.ang;
+  const x = Math.cos(t) * a, y = Math.sin(t) * b, ct = Math.cos(pl.tilt), st = Math.sin(pl.tilt);
+  return [pl.x + x * ct - y * st, pl.y + x * st + y * ct, Math.sin(t) < 0];
+}
+function drawMoon(pl, x, y) {
+  const r = Math.max(2.5, pl.r * pl.moon.size);
+  const g = ctx.createRadialGradient(x - r * 0.4, y - r * 0.4, r * 0.1, x, y, r * 1.1);
+  g.addColorStop(0, '#f4f2ff'); g.addColorStop(0.5, '#b9b6c8'); g.addColorStop(1, '#2a2838');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r, 0, 6.2832); ctx.fill();
+}
+function drawPlanets() {
+  for (const pl of planets) {
+    if (pl.a < 0.01) continue;
+    if (!pl.spr || pl.sprR !== pl.tr || pl.sprS !== cv._scale) renderPlanet(pl);
+    ctx.globalAlpha = pl.a;
+    const [mx, my, behind] = moonPos(pl);
+    if (behind) drawMoon(pl, mx, my);
+    const e = pl.ext * pl.r / pl.sprR;
+    ctx.drawImage(pl.spr, pl.x - e, pl.y - e, e * 2, e * 2);
+    if (!behind) drawMoon(pl, mx, my);
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* ======================================================================
+   流星、飞船
+   ====================================================================== */
+const meteors = [];
+function stepMeteors(f) {
+  if (P.meteors > 0 && Math.random() < f * P.meteors * 3 / 60) {
+    let ang = Math.PI * (0.62 + Math.random() * 0.14);       // 朝左下
+    if (Math.random() < 0.4) ang = Math.PI - ang;            // 朝右下
+    const sp = 650 + Math.random() * 350;
+    meteors.push({ x: W * (0.1 + Math.random() * 0.85), y: H * (Math.random() * 0.5), vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
+      age: 0, life: 0.6 + Math.random() * 0.5, len: 150 + Math.random() * 110 });
+  }
+  for (const m of meteors) { m.age += f; m.x += m.vx * f; m.y += m.vy * f; }
+  for (let i = meteors.length - 1; i >= 0; i--) if (meteors[i].age > meteors[i].life) meteors.splice(i, 1);
+}
+function drawMeteors() {
+  for (const m of meteors) {
+    const a = Math.sin(Math.PI * m.age / m.life), sp = Math.hypot(m.vx, m.vy);
+    const l = m.len * Math.min(1, m.age / 0.18), tx = m.x - m.vx / sp * l, ty = m.y - m.vy / sp * l;
+    const g = ctx.createLinearGradient(tx, ty, m.x, m.y);
+    g.addColorStop(0, 'rgba(180,210,255,0)'); g.addColorStop(1, `rgba(255,255,255,${0.9 * a})`);
+    ctx.strokeStyle = g; ctx.lineWidth = 1.6; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(m.x, m.y); ctx.stroke();
+    ctx.globalAlpha = a; ctx.drawImage(glowSprites[1], m.x - 6, m.y - 6, 12, 12); ctx.globalAlpha = 1;
+  }
+}
+
+const ships = [];
+function syncShips() {
+  while (ships.length < P.ships) ships.push({ kind: ships.length === 1 ? 'sat' : 'rocket', wait: 1 + Math.random() * 6, u: -1, trail: [] });
+  ships.length = P.ships;
+}
+function launch(sh) {
+  const m = 60, side = Math.floor(Math.random() * 4), DH = H - TASKBAR;
+  const edge = s => s === 0 ? [-m, DH * (0.1 + Math.random() * 0.8)] : s === 1 ? [W + m, DH * (0.1 + Math.random() * 0.8)]
+    : s === 2 ? [W * (0.1 + Math.random() * 0.8), -m] : [W * (0.1 + Math.random() * 0.8), DH + m];
+  sh.a = edge(side); sh.b = edge(side ^ 1);
+  const mx = (sh.a[0] + sh.b[0]) / 2, my = (sh.a[1] + sh.b[1]) / 2, len = Math.hypot(sh.b[0] - sh.a[0], sh.b[1] - sh.a[1]);
+  const bend = (Math.random() - 0.5) * len * 0.35;
+  sh.c = [mx - (sh.b[1] - sh.a[1]) / len * bend, my + (sh.b[0] - sh.a[0]) / len * bend];
+  sh.dur = len / (sh.kind === 'sat' ? 26 + Math.random() * 10 : 55 + Math.random() * 25);
+  sh.u = 0; sh.trail = []; sh.spin = Math.random() * 6.28;
+}
+function bez(sh, u) {
+  const v = 1 - u;
+  return [v * v * sh.a[0] + 2 * v * u * sh.c[0] + u * u * sh.b[0], v * v * sh.a[1] + 2 * v * u * sh.c[1] + u * u * sh.b[1]];
+}
+function stepShips(f) {
+  for (const sh of ships) {
+    if (sh.u < 0) { sh.wait -= f; if (sh.wait <= 0) launch(sh); continue; }
+    sh.u += f / sh.dur; sh.spin += f * 0.4;
+    if (sh.u >= 1) { sh.u = -1; sh.wait = 5 + Math.random() * 14; continue; }
+    sh.tt = (sh.tt || 0) + f;
+    if (sh.kind === 'rocket' && sh.tt > 0.09) { sh.tt = 0; sh.trail.push([...bez(sh, sh.u), simT]); if (sh.trail.length > 18) sh.trail.shift(); }
+  }
+}
+function drawShips() {
+  for (const sh of ships) {
+    if (sh.u < 0) continue;
+    const [x, y] = bez(sh, sh.u), [x2, y2] = bez(sh, Math.min(1, sh.u + 0.002));
+    for (const [tx, ty, t0] of sh.trail) {                     // 尾烟
+      const age = simT - t0, a = Math.max(0, 0.35 - age * 0.22);
+      if (a <= 0) continue;
+      ctx.globalAlpha = a; ctx.fillStyle = '#c9d4ff'; ctx.beginPath(); ctx.arc(tx, ty, 1.5 + age * 2.2, 0, 6.28); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    ctx.save(); ctx.translate(x, y);
+    if (sh.kind === 'rocket') {
+      ctx.rotate(Math.atan2(y2 - y, x2 - x));
+      const L = 26, fl = L * (0.4 + 0.12 * Math.sin(simT * 31) + 0.06 * Math.sin(simT * 53));
+      const g = ctx.createLinearGradient(-L * 0.45, 0, -L * 0.45 - fl, 0);
+      g.addColorStop(0, 'rgba(255,236,170,0.95)'); g.addColorStop(0.4, 'rgba(255,140,60,0.8)'); g.addColorStop(1, 'rgba(255,80,40,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(-L * 0.42, -L * 0.13); ctx.lineTo(-L * 0.45 - fl, 0); ctx.lineTo(-L * 0.42, L * 0.13); ctx.fill();
+      ctx.fillStyle = '#e2574c';
+      ctx.beginPath(); ctx.moveTo(-L * 0.2, -L * 0.15); ctx.lineTo(-L * 0.48, -L * 0.33); ctx.lineTo(-L * 0.42, -L * 0.08); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-L * 0.2, L * 0.15); ctx.lineTo(-L * 0.48, L * 0.33); ctx.lineTo(-L * 0.42, L * 0.08); ctx.fill();
+      const b = ctx.createLinearGradient(0, -L * 0.17, 0, L * 0.17);
+      b.addColorStop(0, '#ffffff'); b.addColorStop(1, '#a9b2c6');
+      ctx.fillStyle = b; ctx.beginPath(); ctx.moveTo(L * 0.55, 0);
+      ctx.quadraticCurveTo(L * 0.3, -L * 0.2, -L * 0.42, -L * 0.15); ctx.lineTo(-L * 0.42, L * 0.15); ctx.quadraticCurveTo(L * 0.3, L * 0.2, L * 0.55, 0); ctx.fill();
+      ctx.fillStyle = '#e2574c'; ctx.beginPath(); ctx.moveTo(L * 0.55, 0); ctx.quadraticCurveTo(L * 0.42, -L * 0.1, L * 0.3, -L * 0.15); ctx.lineTo(L * 0.3, L * 0.15); ctx.quadraticCurveTo(L * 0.42, L * 0.1, L * 0.55, 0); ctx.fill();
+      ctx.fillStyle = '#5cc8ff'; ctx.strokeStyle = '#3a4560'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(L * 0.08, 0, L * 0.075, 0, 6.28); ctx.fill(); ctx.stroke();
+    } else {
+      ctx.rotate(sh.spin);
+      ctx.fillStyle = '#3d6fd6'; ctx.strokeStyle = '#9fc0ff'; ctx.lineWidth = 0.6;
+      for (const sx of [-1, 1]) {
+        ctx.fillRect(sx > 0 ? 7 : -21, -4.5, 14, 9); ctx.strokeRect(sx > 0 ? 7 : -21, -4.5, 14, 9);
+        ctx.beginPath(); ctx.moveTo(sx * 7, -4.5); ctx.lineTo(sx * 7, 4.5); ctx.moveTo(sx * 14, -4.5); ctx.lineTo(sx * 14, 4.5); ctx.stroke();
+      }
+      ctx.strokeStyle = '#c9ccd6'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(-7, 0); ctx.lineTo(7, 0); ctx.stroke();
+      ctx.fillStyle = '#e8b64a'; ctx.fillRect(-5, -5, 10, 10);
+      ctx.fillStyle = '#fff2c4'; ctx.fillRect(-5, -5, 10, 2.5);
+      ctx.strokeStyle = '#d8dae4'; ctx.beginPath(); ctx.moveTo(0, -5); ctx.lineTo(0, -10); ctx.stroke();
+      ctx.fillStyle = '#ff6a5a'; ctx.globalAlpha = 0.5 + 0.5 * Math.sin(simT * 4); ctx.beginPath(); ctx.arc(0, -10.5, 1.4, 0, 6.28); ctx.fill();
+    }
+    ctx.restore(); ctx.globalAlpha = 1;
+  }
+}
+
+/* ======================================================================
+   尺寸 / 主循环
+   ====================================================================== */
+function resize() {
+  const box = cv.getBoundingClientRect();
+  W = box.width || innerWidth; H = box.height || innerHeight;
+  // 按画布实际占的大小（带小数）和屏幕实际像素画；预览只是缩小显示，画布用低分辨率
+  const scale = PREVIEW ? 0.5 : (devicePixelRatio || 1);
+  cv.width = Math.round(W * scale); cv.height = Math.round(H * scale); cv._scale = scale;
+  cacheOK = false;
+}
+
+let simT = 0, lastT = 0, frameN = 0, paused = false;
+function step(dt) {
+  const f = dt * P.flow;
+  simT += f;
+  const k = 1 - Math.exp(-dt * 2.2), ka = 1 - Math.exp(-dt * 2.5);
+  for (const pl of planets) {
+    pl.x += (pl.tx - pl.x) * k; pl.y += (pl.ty - pl.y) * k; pl.r += (pl.tr - pl.r) * k;
+    pl.a += (pl.ta - pl.a) * ka; pl.moon.ang += f * pl.moon.sp;
+  }
+  planets = planets.filter(pl => pl.ta > 0 || pl.a > 0.01);
+  stepMeteors(f);
+  stepShips(f);
+}
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (paused) { lastT = 0; return; }
+  if (lastT && now - lastT < 31) return;                 // 30fps
+  const dt = lastT ? Math.min((now - lastT) / 1000, 0.1) : 0.033;
+  lastT = now;
+  step(dt);
+  draw(now);
+  frameN++;
+}
+function draw(now) {
+  const s = cv._scale;
+  if (!cacheOK || L[cur].width !== cv.width || L[cur].height !== cv.height) {   // 尺寸变了（分享时临时放大）：按新尺寸重画缓存
+    renderCache(L[cur], fCur); old = -1; cacheOK = true;
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1;
+  ctx.drawImage(L[cur], 0, 0);
+  if (old >= 0) {
+    const e = morphE(now);
+    if (e < 1) { ctx.globalAlpha = 1 - ease(e); ctx.drawImage(L[old], 0, 0); ctx.globalAlpha = 1; }
+    else old = -1;
+  }
+  ctx.setTransform(s, 0, 0, s, 0, 0);
+  const n = Math.min(twinkles.length, Math.round(36 * P.stars));
+  for (let i = 0; i < n; i++) {
+    const t = twinkles[i], a = 0.55 + 0.45 * Math.sin(simT * t.sp + t.ph);
+    ctx.globalAlpha = a * a;
+    ctx.drawImage(flareSprites[t.tint], t.x - t.size / 2, t.y - t.size / 2, t.size, t.size);
+  }
+  ctx.globalAlpha = 1;
+  drawMeteors();
+  drawPlanets();
+  drawShips();
+}
+
+/* ======================================================================
+   浏览器里单独打开：示例图标，可以拖
+   ====================================================================== */
+const desktop = document.getElementById('desktop');
+const SAMPLE = [['回收站', '#7b8fb5'], ['此电脑', '#2f7de1'], ['项目资料', '#e3a32f'], ['设计稿', '#db2777'], ['周报.xlsx', '#107c41'],
+  ['合同.pdf', '#d33a2c'], ['Chrome', '#f59e0b'], ['VS Code', '#2563eb'], ['Figma', '#8b5cf6'], ['Steam', '#334155'],
+  ['照片', '#0ea5a4'], ['下载', '#e3a32f'], ['笔记.txt', '#64748b'], ['Blender', '#ea7a1e'], ['OBS', '#4b5563'],
+  ['音乐', '#e8553e'], ['截图.png', '#16a34a'], ['备份.zip', '#8a6d3b'], ['Notion', '#1f2937'], ['游戏', '#7c3aed']];
+let grid = { cols: 1, rows: 1 }, drag = null;
+const cellPos = (c, r) => ({ x: GRID_X0 + c * CELL_W, y: GRID_Y0 + r * CELL_H });
+function addIcon([name, color], pos) {
+  const el = document.createElement('div');
+  el.className = 'icon';
+  el.innerHTML = `<div class="glyph" style="background:${color}">${[...name][0]}</div><div class="label">${name}</div>`;
+  el.style.left = pos.x + 'px'; el.style.top = pos.y + 'px';
+  desktop.appendChild(el);
+  const ic = { x: pos.x, y: pos.y, w: el.offsetWidth, h: el.offsetHeight, el };
+  icons.push(ic);
+  el.addEventListener('pointerdown', e => { if (e.button) return; el.setPointerCapture(e.pointerId); el.classList.remove('settle'); drag = { ic, sx: e.clientX, sy: e.clientY, ox: ic.x, oy: ic.y }; });
+  el.addEventListener('pointermove', e => { if (!drag || drag.ic !== ic) return; el.classList.add('drag'); el.style.left = drag.ox + e.clientX - drag.sx + 'px'; el.style.top = drag.oy + e.clientY - drag.sy + 'px'; });
+  el.addEventListener('pointerup', e => {
+    if (!drag || drag.ic !== ic) return;
+    const d = drag; drag = null; el.classList.remove('drag');
+    const cx = d.ox + e.clientX - d.sx + ic.w / 2, cy = d.oy + e.clientY - d.sy + ic.h / 2;
+    let best = null, bd = Infinity;
+    for (let c = 0; c < grid.cols; c++) for (let r = 0; r < grid.rows; r++) {
+      const p = cellPos(c, r);
+      if (icons.some(o => o !== ic && Math.abs(o.x - p.x) < 2 && Math.abs(o.y - p.y) < 2)) continue;
+      const dd = Math.hypot(p.x + CELL_W / 2 - cx, p.y + CELL_H / 2 - cy);
+      if (dd < bd) { bd = dd; best = p; }
+    }
+    if (!best) best = { x: d.ox, y: d.oy };
+    el.classList.add('settle'); ic.x = best.x; ic.y = best.y; el.style.left = best.x + 'px'; el.style.top = best.y + 'px';
+    if (best.x !== d.ox || best.y !== d.oy) commit(false);
+  });
+  return ic;
+}
+function sampleLayout() {
+  grid.cols = Math.max(1, Math.floor((W - GRID_X0) / CELL_W)); grid.rows = Math.max(1, Math.floor((H - TASKBAR - GRID_Y0) / CELL_H));
+  const cells = [];
+  for (let r = 0; r < grid.rows; r++) cells.push([0, r]);
+  for (let r = 0; r < Math.min(5, grid.rows); r++) cells.push([1, r]);
+  const mc = Math.floor(grid.cols * 0.55), mr = Math.floor(grid.rows * 0.3);
+  for (const [dc, dr] of [[0, 0], [1, 0], [0, 1], [1, 1], [2, 1]]) cells.push([mc + dc, mr + dr]);
+  let i = 0;
+  for (const [c, r] of cells) if (c < grid.cols && r < grid.rows) addIcon(SAMPLE[i++ % SAMPLE.length], cellPos(c, r));
+}
+const hint = document.getElementById('hint');
+addEventListener('keydown', e => {
+  if (WALL || PREVIEW) return;
+  if (e.key === 'r' || e.key === 'R') reseed((Math.random() * 1e6) | 0);
+  else if (e.key === 'h' || e.key === 'H') hint.classList.toggle('hidden');
+});
+let resizeT = 0;
+addEventListener('resize', () => {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(() => { resize(); buildNoise(); commit(false); }, 100);
+});
+
+/* ======================================================================
+   托管模式：画面由外部驱动（和其他主题一样的消息）
+   - 壁纸模式（?wallpaper=1）：桌面宿主通过 WebView2 发消息
+   - 预览模式（?preview=1）：设置窗口通过 iframe 的 postMessage 发消息
+   消息：icons（真实图标矩形，物理像素）/ settings（参数，部分更新）/ reset（恢复默认）/ pause
+   ====================================================================== */
+function reseed(v) {
+  seed = v; buildNoise();
+  planets = [];
+  if (iconsSeen) commit(true);
+}
+function applySettings(v) {
+  if (typeof v.seed === 'number' && v.seed !== seed) reseed(v.seed);
+  let field = false, plan = false;
+  for (const k in v) {
+    if (!(k in LIMITS) || typeof v[k] !== 'number' || !isFinite(v[k])) continue;
+    let x = clamp(v[k], LIMITS[k][0], LIMITS[k][1]);
+    if (INTS.has(k)) x = Math.round(x);
+    if (P[k] === x) continue;
+    P[k] = x;
+    if (k === 'sigma' || k === 'glow' || k === 'stars' || k === 'adaptive') field = true;
+    if (k === 'planets') plan = true;
+    if (k === 'ships') syncShips();
+  }
+  if (field) commit(false);
+  else if (plan && iconsSeen) planPlanets(false);
+}
+function drawGhosts() {
+  document.getElementById('ghosts').innerHTML = icons.map(ic => `<div class="ghost" style="left:${ic.x}px;top:${ic.y}px;width:${ic.w}px;height:${ic.h}px"><i></i><b></b></div>`).join('');
+}
+function startHostedMode() {
+  document.body.classList.add('wall');
+  if (PREVIEW) {
+    document.body.classList.add('preview');
+    const g = document.createElement('div'); g.id = 'ghosts'; document.body.appendChild(g);
+  }
+  icons = [];
+  commit(true);                                   // 先是一片星空（还不知道图标在哪）
+  let first = true;
+  const handle = m => {
+    if (m.t === 'pause') { paused = PREVIEW ? false : !!m.v; return; }
+    if (m.t === 'settings') { applySettings(m.v || {}); return; }
+    if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
+    if (m.t !== 'icons') return;
+    const k = window.devicePixelRatio || 1;       // 物理像素 → CSS 像素
+    icons = m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : [];
+    if (PREVIEW) drawGhosts();
+    iconsSeen = true;
+    commit(first);                                // 第一次：星云慢慢亮起来；之后：跟着图标平滑变化
+    first = false;
+  };
+  if (PREVIEW) {
+    addEventListener('message', ev => { if (ev.source === parent) handle(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data); });
+    parent.postMessage(JSON.stringify({ t: 'ready' }), '*');
+    return;
+  }
+  const host = window.chrome && window.chrome.webview;
+  if (!host) return;
+  host.addEventListener('message', ev => handle(JSON.parse(ev.data)));
+  host.postMessage('ready');
+}
+
+/* ---------- 启动 ---------- */
+window.__dbg = {
+  P, commit, reseed,
+  bench() {
+    const ts = [];
+    for (let i = 0; i < 10; i++) { const a = performance.now(); draw(performance.now()); ts.push(performance.now() - a); }
+    ts.sort((a, b) => a - b);
+    const a = performance.now(); commit(false); const c = performance.now() - a;
+    return { frame: +ts[5].toFixed(2), commit: +c.toFixed(1), canvas: cv.width + 'x' + cv.height };
+  },
+};
+resize();
+buildNoise();
+syncShips();
+if (WALL || PREVIEW) startHostedMode();
+else { sampleLayout(); commit(true); }
+requestAnimationFrame(frame);
+</script>
+<script src="share.js"></script>   <!-- 分享图片 / 分享动画（示例图标、名字是色块） -->
+</body>
+</html>

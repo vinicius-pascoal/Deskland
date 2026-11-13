@@ -547,6 +547,48 @@
           "unit": ""
         }
       }
+    },
+    "space": {
+      "name": "Space",
+      "desc": "Your icons gather glowing nebulae and star clusters, while planets rest in open deep space and meteors and rockets drift by",
+      "groups": [
+        "Around icons",
+        "Starfield",
+        "Details"
+      ],
+      "params": {
+        "sigma": {
+          "label": "Nebula reach",
+          "hint": "How far the nebula around your icons spreads out"
+        },
+        "glow": {
+          "label": "Nebula brightness",
+          "hint": "How brightly the nebula glows; 0 leaves only the stars"
+        },
+        "stars": {
+          "label": "Star density",
+          "hint": "How many background stars and twinkling bright stars appear"
+        },
+        "flow": {
+          "label": "Animation speed",
+          "hint": "How fast stars twinkle, moons orbit and spacecraft fly"
+        },
+        "planets": {
+          "label": "Planets",
+          "hint": "Number of planets resting in open space; 0 to hide. Fewer appear if there is not enough room.",
+          "unit": ""
+        },
+        "meteors": {
+          "label": "Meteors",
+          "hint": "How often shooting stars streak across; 0 to hide",
+          "unit": ""
+        },
+        "ships": {
+          "label": "Spacecraft",
+          "hint": "Rockets and satellites slowly crossing the screen",
+          "unit": ""
+        }
+      }
     }
   }
 }
