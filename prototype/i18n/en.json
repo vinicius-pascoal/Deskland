@@ -556,6 +556,88 @@
           ]
         }
       }
+    },
+    "pond": {
+      "name": "Koi Pond",
+      "desc": "Your icons float on lily pads while koi glide beneath; with music, ripples and bubbles keep the beat",
+      "groups": [
+        "Pond",
+        "Sound"
+      ],
+      "params": {
+        "koi": {
+          "label": "Koi",
+          "hint": "How many koi swim in the pond; 0 to hide",
+          "unit": ""
+        },
+        "pads": {
+          "label": "Floating lilies",
+          "hint": "How many lily pads drift on the open water (pads under icons are not affected)"
+        },
+        "flow": {
+          "label": "Swim speed",
+          "hint": "How fast the koi swim and the light ripples drift"
+        },
+        "audio": {
+          "label": "React to sound",
+          "hint": "Bass and beats send ripples and startle the koi, highs make bubbles, and louder music brightens the light. Sound is analyzed locally; the microphone is never used.",
+          "options": [
+            "Off",
+            "On"
+          ]
+        },
+        "albumTint": {
+          "label": "Album colors",
+          "hint": "Tint the lotus flowers and underwater light with the cover colors of what is playing",
+          "options": [
+            "Off",
+            "On"
+          ]
+        }
+      }
+    },
+    "nightcity": {
+      "name": "Night City",
+      "desc": "Your icons hang on skyscraper walls; with music, the whole city lights up by frequency and neon signs flash on the beat",
+      "groups": [
+        "City",
+        "Sound"
+      ],
+      "params": {
+        "rain": {
+          "label": "Rain",
+          "hint": "How hard it rains; with sound on, louder music brings heavier rain. 0 for no rain"
+        },
+        "neon": {
+          "label": "Neon signs",
+          "hint": "How many neon signs hang on the buildings (kept away from icons)",
+          "unit": ""
+        },
+        "audio": {
+          "label": "React to sound",
+          "hint": "Each building follows one frequency band and its windows light up from the bottom with the volume; neon signs flash in turn on the beat. Sound is analyzed locally; the microphone is never used.",
+          "options": [
+            "Off",
+            "On"
+          ]
+        },
+        "albumTint": {
+          "label": "Album colors",
+          "hint": "Tint the neon and window light with the cover colors of what is playing",
+          "options": [
+            "Off",
+            "On"
+          ]
+        },
+        "showTrack": {
+          "label": "Rooftop billboard",
+          "hint": "Show the title and artist of what is playing on a rooftop billboard",
+          "options": [
+            "Off",
+            "On"
+          ]
+        }
+      }
     }
   }
 }

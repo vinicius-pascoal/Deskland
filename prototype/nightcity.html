@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deskland · 夜城（原型）</title>
+<!--
+  Deskland · 夜城（正面看一排楼；Canvas 2D）
+  - 图标所在的地方楼盖得更高，图标就挂在楼的外墙上（图标后面的窗不亮，字看得清）
+  - 跟着声音（默认开启）：每栋楼对应一段频率，窗户从下往上亮到那一段的音量，像一台均衡器；
+    霓虹招牌踩着节拍轮流闪；雨随音量变大。没有声音时窗户慢慢地明灭
+  - 跟着专辑封面变色（默认关闭）：霓虹和窗光染上正在播放的曲目封面的主色
+  - 屋顶广告牌显示正在播放的曲名（默认关闭，曲名属于隐私）
+  性能：天空、远景、楼和熄灭的窗画进静态缓存；所有窗亮着的样子另画一张缓存，
+  每帧按每栋楼的音量从这张图上裁一段贴上去（几十次 drawImage），招牌是预先画好的精灵图，雨是一条路径
+-->
+<style>
+  :root { --taskbar: 48px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0b1026; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif; }
+  #art { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #desktop { position: fixed; left: 0; top: 0; right: 0; bottom: var(--taskbar); }
+  .icon {
+    position: absolute; width: 76px; padding: 4px 2px 5px;
+    display: flex; flex-direction: column; align-items: center;
+    border: 1px solid transparent; border-radius: 4px;
+    user-select: none; touch-action: none; cursor: default;
+  }
+  .icon:hover { background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.2); }
+  .icon.drag { opacity: .88; z-index: 10; transform: scale(1.04); }
+  .icon.settle { transition: left .22s cubic-bezier(.2,.8,.3,1), top .22s cubic-bezier(.2,.8,.3,1); }
+  .glyph { width: 48px; height: 48px; border-radius: 10px; display: grid; place-items: center; color: #fff;
+    font-size: 21px; font-weight: 700; box-shadow: 0 2px 6px rgba(0,0,0,.35); pointer-events: none; }
+  .label {
+    margin-top: 3px; max-width: 72px; font-size: 12px; line-height: 15px; color: #fff; text-align: center;
+    text-shadow: 0 0 2px rgba(0,0,0,.95), 0 1px 3px rgba(0,0,0,.85);
+    word-break: break-all; overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; pointer-events: none;
+  }
+  #taskbar {
+    position: fixed; left: 0; right: 0; bottom: 0; height: var(--taskbar);
+    background: rgba(16,16,30,.62); backdrop-filter: blur(28px) saturate(1.6); -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    border-top: 1px solid rgba(255,255,255,.08); z-index: 40;
+  }
+  #hint {
+    position: fixed; top: 14px; right: 14px; padding: 10px 14px; border-radius: 10px; z-index: 50;
+    background: rgba(20,16,40,.72); color: #f0e8ff; font-size: 12px; line-height: 1.6;
+    border: 1px solid rgba(255,255,255,.14); backdrop-filter: blur(16px);
+  }
+  #hint.hidden { display: none; }
+  body.wall #desktop, body.wall #taskbar, body.wall #hint { display: none; }
+  #ghosts { position: fixed; inset: 0; pointer-events: none; display: none; }
+  body.preview #ghosts { display: block; }
+  .ghost { position: absolute; }
+  .ghost i { position: absolute; left: 50%; top: 4px; width: 48px; height: 48px; margin-left: -24px; border-radius: 9px;
+    background: rgba(255,255,255,.88); box-shadow: 3px 6px 8px rgba(0,0,0,.35); }
+  .ghost b { position: absolute; left: 14%; right: 14%; top: 60px; height: 10px; border-radius: 5px; background: rgba(255,255,255,.75); }
+</style>
+</head>
+<body>
+<canvas id="art"></canvas>
+<div id="desktop"></div>
+<div id="taskbar"></div>
+<div id="hint"><b>Deskland · 夜城</b><br>拖动图标，楼会跟着长高、变矮<br>放点音乐：窗户随频率亮起，霓虹踩着节拍闪<br>R 换一张 · H 隐藏提示</div>
+<script src="audio.js"></script>
+<script src="media.js"></script>
+
+<script>
+'use strict';
+
+/* ======================================================================
+   参数（默认值和 themes.json 里夜城主题的 default 保持一致）
+   ====================================================================== */
+const CELL_W = 76, CELL_H = 100, GRID_X0 = 4, GRID_Y0 = 6, TASKBAR = 48;
+const MORPH_MS = 1200;
+const WIN_W = 6, WIN_H = 8, WIN_DX = 11, WIN_DY = 15;   // 窗户大小、间距（CSS 像素）
+
+const QS = new URLSearchParams(location.search);
+const WALL = QS.has('wallpaper');
+const PREVIEW = QS.has('preview');
+const P = { rain: 0.5, neon: 4, audio: 1, albumTint: 0, showTrack: 0 };
+const DEFAULTS = Object.assign({}, P);
+const LIMITS = { rain: [0, 1], neon: [0, 8], audio: [0, 1], albumTint: [0, 1], showTrack: [0, 1] };
+const INTS = new Set(['neon', 'audio', 'albumTint', 'showTrack']);
+
+const cv = document.getElementById('art');
+const ctx = cv.getContext('2d', { alpha: false });
+let W = innerWidth, H = innerHeight;
+let icons = [];
+let seed = QS.has('seed') ? (+QS.get('seed') | 0) : (Math.random() * 1e6) | 0;
+
+function hash2(x, y, k) {
+  let h = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ Math.imul((seed + k) | 0, 2246822519);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function vnoise(x, k) {                              // 一维值噪声
+  const xi = Math.floor(x), xf = x - xi, u = xf * xf * (3 - 2 * xf);
+  return hash2(xi, 0, k) * (1 - u) + hash2(xi + 1, 0, k) * u;
+}
+function mulberry32(a) {
+  return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const ease = t => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+const hex = c => [parseInt(c.slice(1, 3), 16), parseInt(c.slice(3, 5), 16), parseInt(c.slice(5, 7), 16)];
+const rgb = (a, al) => al === undefined ? `rgb(${a[0] | 0},${a[1] | 0},${a[2] | 0})` : `rgba(${a[0] | 0},${a[1] | 0},${a[2] | 0},${al})`;
+const mixc = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+// 封面颜色当霓虹用：拉高饱和度和亮度（灰暗的封面也能有亮的霓虹）
+function neonize(c) {
+  let [r, g, b] = c.map(v => v / 255);
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+  if (mx - mn < 0.08) return [255, 240, 220];        // 几乎是灰的：用暖白
+  const k = 1 / mx; r *= k; g *= k; b *= k;            // 最亮的通道拉满
+  const m2 = Math.min(r, g, b); r = (r - m2 * 0.6) / (1 - m2 * 0.6); g = (g - m2 * 0.6) / (1 - m2 * 0.6); b = (b - m2 * 0.6) / (1 - m2 * 0.6);
+  return [r * 255, g * 255, b * 255].map(v => clamp(v, 40, 255));
+}
+
+/* ======================================================================
+   规划：一排楼。图标所在的地方楼高到图标上面，图标挂在外墙上
+   ====================================================================== */
+let blocks = [];       // { x, w, top, lit:[r,g,b], tone, roof, wins:[[x,y]...], level, peak }
+let signs = [];
+let board = null;      // 屋顶广告牌的位置
+function iconTopIn(x0, x1) {
+  let top = Infinity;
+  for (const ic of icons) if (ic.x < x1 - 6 && ic.x + ic.w > x0 + 6) top = Math.min(top, ic.y);
+  return top;
+}
+function nearIcon(x, y, w, h, m) {
+  return icons.some(ic => x < ic.x + ic.w + m && x + w > ic.x - m && y < ic.y + ic.h + m && y + h > ic.y - m);
+}
+const LIGHTS = [[255, 214, 138], [255, 196, 120], [168, 216, 255], [255, 236, 190]];
+function planCity() {
+  const r = mulberry32(seed ^ 0x6a09), DH = H - TASKBAR;
+  blocks = [];
+  let x = -8 - r() * 20;
+  while (x < W) {
+    const w = 58 + r() * 84;
+    const skyline = DH * (0.3 + 0.42 * vnoise(x / 260, 3) + 0.12 * r());
+    let top = H - skyline;
+    const it = iconTopIn(x, x + w);
+    if (it < Infinity) top = Math.min(top, it - 26 - r() * 30);
+    const b = { x, w, top: Math.max(-40, top), tone: r(), lit: LIGHTS[r() * LIGHTS.length | 0], roof: r(), level: 0, peak: 0, ph: r() * 100, wins: [] };
+    const cols = Math.floor((w - 12) / WIN_DX), rows = Math.floor((H - b.top - 14) / WIN_DY);
+    const x0 = b.x + (w - (cols - 1) * WIN_DX - WIN_W) / 2;
+    for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
+      const wx = x0 + i * WIN_DX, wy = H - 10 - (j + 1) * WIN_DY;
+      if (wy < b.top + 10) continue;
+      b.wins.push([wx, wy, nearIcon(wx, wy, WIN_W, WIN_H, 7), hash2(i * 31 + (x | 0), j, 9)]);
+    }
+    blocks.push(b);
+    x += w + (r() < 0.25 ? 4 + r() * 10 : 0);
+  }
+  planSigns(r);
+  planBoard();
+}
+const SIGN_TEXT = ['BAR', 'HOTEL', '24H', 'CAFE', 'JAZZ', 'OPEN', 'CLUB', 'RAMEN', 'DISCO', 'MOTEL'];
+function planSigns(r) {
+  signs = [];
+  const want = P.neon;
+  let tries = 0;
+  while (signs.length < want && tries++ < 200) {
+    const b = blocks[r() * blocks.length | 0];
+    if (!b || b.w < 50) continue;
+    const vertical = r() < 0.5, text = SIGN_TEXT[r() * SIGN_TEXT.length | 0];
+    const sw = vertical ? 26 : Math.min(b.w - 14, 22 + text.length * 15), sh = vertical ? 22 + text.length * 22 : 30;
+    const sx = vertical ? (r() < 0.5 ? b.x + 4 : b.x + b.w - sw - 4) : b.x + (b.w - sw) / 2;
+    const span = H - TASKBAR - 30 - b.top - sh - 20;
+    if (span < 10) continue;
+    const sy = b.top + 20 + r() * span;
+    if (nearIcon(sx, sy, sw, sh, 18)) continue;
+    if (signs.some(s => sx < s.x + s.w + 10 && sx + sw > s.x - 10 && sy < s.y + s.h + 10 && sy + sh > s.y - 10)) continue;
+    signs.push({ x: sx, y: sy, w: sw, h: sh, text, vertical, slot: signs.length, flick: 0, on: 0.8, spr: null });
+  }
+}
+function planBoard() {
+  board = null;
+  // 屋顶上能立广告牌的楼：不太窄，屋顶上方那块地方没有图标
+  let best = null;
+  for (const b of blocks) {
+    const bw = Math.min(250, Math.max(170, b.w + 50)), bh = 60, bx = b.x + b.w / 2 - bw / 2, by = b.top - bh - 14;
+    if (by < 16 || bx < 8 || bx + bw > W - 8 || nearIcon(bx, by, bw, bh + 14, 22)) continue;
+    const score = b.w + (H - b.top) * 0.3 - Math.abs(b.x - W * 0.62) * 0.2;
+    if (!best || score > best.score) best = { x: bx, y: by, w: bw, h: bh, roof: b.top, score };
+  }
+  board = best;
+}
+
+/* ======================================================================
+   静态缓存：天空、远景、楼和熄灭的窗；另一张：所有窗亮着
+   ====================================================================== */
+const BG = [document.createElement('canvas'), document.createElement('canvas')];
+const LIT = document.createElement('canvas');
+let curB = 0, oldB = -1, morphT0 = 0, cacheOK = false;
+function lightColor(b) {
+  const cols = mediaColors();
+  return cols ? mixc(b.lit, neonize(cols[b.roof * cols.length | 0]), 0.55) : b.lit;
+}
+function renderBg(dst) {
+  dst.width = cv.width; dst.height = cv.height;
+  const c = dst.getContext('2d', { alpha: false }), s = cv._scale, r = mulberry32(seed ^ 0x3c6e);
+  c.setTransform(s, 0, 0, s, 0, 0);
+  const sky = c.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, '#070a1e'); sky.addColorStop(0.55, '#1b1640'); sky.addColorStop(0.85, '#3a2150'); sky.addColorStop(1, '#5a2c55');
+  c.fillStyle = sky; c.fillRect(0, 0, W, H);
+  for (let i = 0, n = W * H / 9000; i < n; i++) {                // 星星（城里看到的不多）
+    c.fillStyle = `rgba(230,230,255,${0.2 + r() * 0.5})`; const z = r() < 0.1 ? 1.6 : 1;
+    c.fillRect(r() * W, r() * H * 0.55, z, z);
+  }
+  // 月亮：一弯
+  const mx = W * (0.7 + r() * 0.2), my = H * (0.1 + r() * 0.08), mr = 22;
+  const halo = c.createRadialGradient(mx, my, mr * 0.8, mx, my, mr * 4);
+  halo.addColorStop(0, 'rgba(255,240,210,0.18)'); halo.addColorStop(1, 'rgba(255,240,210,0)');
+  c.fillStyle = halo; c.fillRect(mx - mr * 4, my - mr * 4, mr * 8, mr * 8);
+  c.fillStyle = '#f6ecd2'; c.beginPath(); c.arc(mx, my, mr, 0, 6.283); c.fill();
+  c.fillStyle = '#121236'; c.beginPath(); c.arc(mx + mr * 0.45, my - mr * 0.2, mr * 0.92, 0, 6.283); c.fill();
+  // 远处两层楼影，越远越淡、越偏紫
+  for (const [k, col, wl] of [[0.62, '#251d48', 0.25], [0.8, '#1a1534', 0.4]]) {
+    let x = -10;
+    while (x < W) {
+      const w = 30 + r() * 60, h = (H - TASKBAR) * k * (0.4 + 0.6 * vnoise(x / 180 + k * 10, 7)) + 40;
+      c.fillStyle = col; c.fillRect(x, H - h, w + 1, h);
+      if (r() < 0.3) { c.fillRect(x + w * 0.45, H - h - 14, 2, 14); }
+      c.fillStyle = `rgba(255,200,150,${wl * 0.5})`;
+      for (let wy = H - h + 8; wy < H; wy += 9) for (let wx = x + 4; wx < x + w - 4; wx += 7) if (r() < 0.07) c.fillRect(wx, wy, 2, 3);
+      x += w;
+    }
+  }
+  // 城市灯光把低处的空气照亮
+  const haze = c.createLinearGradient(0, H * 0.45, 0, H);
+  haze.addColorStop(0, 'rgba(255,120,160,0)'); haze.addColorStop(1, 'rgba(255,120,160,0.16)');
+  c.fillStyle = haze; c.fillRect(0, 0, W, H);
+  // 主楼
+  for (const b of blocks) {
+    const base = mixc([22, 24, 44], [34, 30, 56], b.tone);
+    const g = c.createLinearGradient(b.x, 0, b.x + b.w, 0);
+    g.addColorStop(0, rgb(mixc(base, [70, 64, 110], 0.35))); g.addColorStop(0.12, rgb(base)); g.addColorStop(1, rgb(mixc(base, [6, 6, 14], 0.4)));
+    c.fillStyle = g; c.fillRect(b.x, b.top, b.w, H - b.top);
+    c.fillStyle = 'rgba(160,150,230,0.18)'; c.fillRect(b.x, b.top, b.w, 2);   // 屋檐的一道亮边
+    // 屋顶：水箱、天线、退台
+    c.fillStyle = rgb(mixc(base, [0, 0, 0], 0.25));
+    if (b.roof < 0.3) { const tx = b.x + b.w * 0.2; c.fillRect(tx, b.top - 16, 16, 14); c.fillRect(tx + 2, b.top - 4, 2, 4); c.fillRect(tx + 12, b.top - 4, 2, 4); c.beginPath(); c.moveTo(tx - 2, b.top - 16); c.lineTo(tx + 8, b.top - 23); c.lineTo(tx + 18, b.top - 16); c.fill(); }
+    else if (b.roof < 0.55) { c.fillRect(b.x + b.w * 0.6, b.top - 34, 2, 34); c.fillStyle = 'rgba(255,60,60,0.9)'; c.fillRect(b.x + b.w * 0.6 - 1, b.top - 36, 4, 3); }
+    else if (b.roof < 0.75) { c.fillRect(b.x + b.w * 0.15, b.top - 12, b.w * 0.7, 12); }
+    for (const [wx, wy, hide, u] of b.wins) {
+      c.fillStyle = hide ? 'rgba(10,10,22,0.9)' : u < 0.1 ? rgb(mixc(b.lit, [40, 30, 40], 0.55)) : '#151a2c';
+      c.fillRect(wx, wy, WIN_W, WIN_H);
+    }
+  }
+  c.setTransform(1, 0, 0, 1, 0, 0);
+}
+function renderLit() {
+  LIT.width = cv.width; LIT.height = cv.height;
+  const c = LIT.getContext('2d'), s = cv._scale;
+  c.setTransform(s, 0, 0, s, 0, 0);
+  for (const b of blocks) {
+    const col = lightColor(b);
+    c.shadowColor = rgb(col, 0.8); c.shadowBlur = 6 * s;
+    for (const [wx, wy, hide, u] of b.wins) {
+      if (hide) continue;
+      c.fillStyle = rgb(mixc(col, [255, 255, 255], u * 0.35));
+      c.fillRect(wx, wy, WIN_W, WIN_H);
+    }
+  }
+  c.shadowBlur = 0;
+  c.setTransform(1, 0, 0, 1, 0, 0);
+}
+// 霓虹：亮（带辉光）和灭两张精灵图，只在颜色或尺寸变了时重画
+const NEON_DEFAULT = [[255, 61, 127], [61, 224, 255], [255, 176, 61], [166, 92, 255]];
+function neonColor(i) {
+  const cols = mediaColors();
+  return cols ? neonize(cols[i % cols.length]) : NEON_DEFAULT[i % NEON_DEFAULT.length];
+}
+function renderSign(sg) {
+  const s = cv._scale, pad = 14, col = neonColor(sg.slot);
+  const mk = on => {
+    const cc = document.createElement('canvas');
+    cc.width = Math.ceil((sg.w + pad * 2) * s); cc.height = Math.ceil((sg.h + pad * 2) * s);
+    const c = cc.getContext('2d');
+    c.setTransform(s, 0, 0, s, pad * s, pad * s);
+    c.fillStyle = 'rgba(8,8,16,0.85)'; c.strokeStyle = 'rgba(120,120,150,0.5)'; c.lineWidth = 1;
+    c.fillRect(0, 0, sg.w, sg.h); c.strokeRect(0.5, 0.5, sg.w - 1, sg.h - 1);
+    c.font = `700 ${sg.vertical ? 17 : 18}px "Segoe UI", sans-serif`; c.textAlign = 'center'; c.textBaseline = 'middle';
+    const draw = () => {
+      if (sg.vertical) [...sg.text].forEach((ch, i) => c.fillText(ch, sg.w / 2, 13 + i * 22)); else c.fillText(sg.text, sg.w / 2, sg.h / 2 + 1);
+      c.strokeRect(3.5, 3.5, sg.w - 7, sg.h - 7);
+    };
+    if (on) {
+      c.shadowColor = rgb(col); c.shadowBlur = 12 * s; c.fillStyle = rgb(col); c.strokeStyle = rgb(col); c.lineWidth = 1.6;
+      draw(); c.shadowBlur = 4 * s; c.fillStyle = rgb(mixc(col, [255, 255, 255], 0.55)); draw();
+    } else { c.fillStyle = rgb(mixc(col, [30, 30, 40], 0.75)); c.strokeStyle = rgb(mixc(col, [30, 30, 40], 0.75)); c.lineWidth = 1.6; draw(); }
+    return cc;
+  };
+  sg.spr = [mk(false), mk(true)]; sg.sprS = s; sg.pad = pad;
+}
+// 屋顶广告牌（正在播放）：曲名变了才重画
+let boardSpr = null, boardKey = '';
+function renderBoard() {
+  const s = cv._scale;
+  const key = [track ? track.title + '\n' + track.artist : '', mediaColors() ? media.join() : '', s, board ? board.w : 0].join('|');
+  if (key === boardKey) return;
+  boardKey = key; boardSpr = null;
+  if (!board || !track) return;
+  const pad = 12, cc = document.createElement('canvas');
+  cc.width = Math.ceil((board.w + pad * 2) * s); cc.height = Math.ceil((board.h + 14 + pad * 2) * s);
+  const c = cc.getContext('2d'), col = neonColor(0), col2 = neonColor(1);
+  c.setTransform(s, 0, 0, s, pad * s, pad * s);
+  c.fillStyle = '#2a2838'; c.fillRect(board.w * 0.25, board.h, 4, 14); c.fillRect(board.w * 0.75 - 4, board.h, 4, 14);   // 支架
+  c.fillStyle = 'rgba(10,10,20,0.92)'; c.fillRect(0, 0, board.w, board.h);
+  c.shadowColor = rgb(col); c.shadowBlur = 10 * s; c.strokeStyle = rgb(col); c.lineWidth = 2; c.strokeRect(2, 2, board.w - 4, board.h - 4);
+  const fit = (txt, max, font) => { c.font = font; if (c.measureText(txt).width <= max) return txt; while (txt.length > 1 && c.measureText(txt + '…').width > max) txt = txt.slice(0, -1); return txt + '…'; };
+  c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.shadowBlur = 8 * s; c.shadowColor = rgb(col2); c.fillStyle = rgb(mixc(col2, [255, 255, 255], 0.5));
+  c.fillText(fit('♪ ' + track.title, board.w - 20, '700 15px "Segoe UI", "Microsoft YaHei UI", sans-serif'), board.w / 2, board.h * 0.38);
+  if (track.artist) {
+    c.shadowBlur = 4 * s; c.fillStyle = 'rgba(235,230,255,0.8)';
+    c.fillText(fit(track.artist, board.w - 24, '12px "Segoe UI", "Microsoft YaHei UI", sans-serif'), board.w / 2, board.h * 0.72);
+  }
+  boardSpr = cc; boardSpr.pad = pad;
+}
+
+let iconsSeen = !(WALL || PREVIEW);
+function commit(fromEmpty) {
+  planCity();
+  if (cacheOK && !fromEmpty) { oldB = curB; curB = 1 - curB; morphT0 = performance.now(); } else oldB = -1;
+  renderBg(BG[curB]); renderLit();
+  for (const sg of signs) renderSign(sg);
+  boardKey = '';
+  cacheOK = true;
+  if (paused) { oldB = -1; draw(performance.now()); }
+}
+function recolor() {                                // 专辑颜色变了：窗光、霓虹、广告牌重画（楼不动）
+  if (!cacheOK) return;
+  renderBg(BG[curB]); renderLit();
+  for (const sg of signs) renderSign(sg);
+  boardKey = '';
+}
+
+/* ======================================================================
+   雨
+   ====================================================================== */
+const drops = [];
+const MAX_DROPS = 700;
+function stepRain(dt, amount) {
+  const want = Math.round(MAX_DROPS * amount);
+  while (drops.length < want) drops.push({ x: Math.random() * (W + 200) - 100, y: Math.random() * H, v: 650 + Math.random() * 450, l: 9 + Math.random() * 14 });
+  if (drops.length > want) drops.length = want;
+  for (const d of drops) {
+    d.y += d.v * dt; d.x += d.v * 0.14 * dt;
+    if (d.y > H) { d.y = -d.l - Math.random() * 60; d.x = Math.random() * (W + 200) - 100; }
+  }
+}
+function drawRain() {
+  if (!drops.length) return;
+  ctx.strokeStyle = 'rgba(176,196,240,0.26)'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (const d of drops) { ctx.moveTo(d.x, d.y); ctx.lineTo(d.x - d.l * 0.14, d.y - d.l); }
+  ctx.stroke();
+}
+
+/* ======================================================================
+   声音、正在播放
+   ====================================================================== */
+const AU = { on: false, lv: 0, bands: new Float32Array(32), beat: false, beats: 0, rain: 0, flash: 0 };
+let audioOff = null, mediaOff = null, media = null, track = null;
+function follow(cur, target, dt, up, down) { return cur + (target - cur) * (1 - Math.exp(-dt / (target > cur ? up : down))); }
+function syncAudio() {
+  const want = P.audio === 1 && !!window.DesklandAudio;
+  if (want && !audioOff) {
+    audioOff = DesklandAudio.subscribe(a => {
+      AU.on = a.on; AU.lv = a.on ? a.lv : 0; AU.bands.set(a.bands);
+      if (a.beat) AU.beat = true;
+    });
+  } else if (!want && audioOff) { audioOff(); audioOff = null; AU.on = false; AU.lv = 0; AU.bands.fill(0); AU.beat = false; }
+}
+function syncMedia() {
+  const want = (P.albumTint === 1 || P.showTrack === 1) && !!window.DesklandMedia;
+  if (want && !mediaOff) mediaOff = DesklandMedia.subscribe(onMedia);
+  else if (!want && mediaOff) { mediaOff(); mediaOff = null; onMedia({ on: false, colors: [] }); }
+  else if (want) onMedia(DesklandMedia.state);
+}
+function onMedia(m) {
+  const before = media ? media.join() : '';
+  media = P.albumTint === 1 && m.on && m.colors.length ? m.colors.slice() : null;
+  track = P.showTrack === 1 && m.on && m.playing && m.title ? { title: m.title, artist: m.artist || '' } : null;
+  if ((media ? media.join() : '') !== before) recolor();
+}
+function mediaColors() { return media ? media.map(hex) : null; }
+function stepAudio(dt) {
+  const live = AU.on && P.audio === 1;
+  const n = blocks.length;
+  for (let i = 0; i < n; i++) {
+    const b = blocks[i];
+    let target;
+    if (live) {
+      const b0 = Math.floor(i * 32 / n), b1 = Math.max(b0 + 1, Math.floor((i + 1) * 32 / n));
+      let v = 0; for (let k = b0; k < b1; k++) v = Math.max(v, AU.bands[k]);
+      target = 0.06 + v * 0.94;
+    } else target = 0.1 + 0.22 * vnoise(simT * 0.12 + b.ph, 21);     // 没声音：慢慢明灭
+    b.level = follow(b.level, target, dt, 0.05, live ? 0.22 : 1.5);
+    b.peak = b.level > b.peak ? b.level : Math.max(b.level, b.peak - dt * 0.28);
+  }
+  if (AU.beat) {
+    AU.beat = false; AU.beats++; AU.flash = 1;
+    // 招牌轮流闪：每一拍点亮其中一半（奇偶交替），被点到的猛地一亮
+    for (const sg of signs) if ((sg.slot + AU.beats) % 2 === 0) sg.flick = 1;
+  }
+  AU.flash *= Math.exp(-dt * 6);
+  for (const sg of signs) {
+    sg.flick *= Math.exp(-dt * 5);
+    // 平时：偶尔接触不良闪一下
+    if (Math.random() < dt * 0.08) sg.glitch = 0.25;
+    sg.glitch = Math.max(0, (sg.glitch || 0) - dt);
+    const base = live ? 0.45 + AU.lv * 0.25 : 0.8;
+    sg.on = sg.glitch > 0 && Math.sin(simT * 90) > 0 ? 0.15 : Math.min(1, base + sg.flick * 0.6);
+  }
+  AU.rain = follow(AU.rain, live ? 0.3 + AU.lv * 0.7 : 0.55, dt, 0.4, 1.8);
+}
+
+/* ======================================================================
+   尺寸 / 主循环
+   ====================================================================== */
+function resize() {
+  const box = cv.getBoundingClientRect();
+  W = box.width || innerWidth; H = box.height || innerHeight;
+  const scale = PREVIEW ? 0.5 : (devicePixelRatio || 1);
+  cv.width = Math.round(W * scale); cv.height = Math.round(H * scale); cv._scale = scale;
+  cacheOK = false;
+}
+
+let simT = 0, lastT = 0, frameN = 0, paused = false;
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (paused) { lastT = 0; return; }
+  if (lastT && now - lastT < 31) return;                 // 30fps
+  const dt = lastT ? Math.min((now - lastT) / 1000, 0.1) : 0.033;
+  lastT = now;
+  simT += dt;
+  stepAudio(dt);
+  stepRain(dt, P.rain * AU.rain);
+  draw(now);
+  frameN++;
+}
+function draw(now) {
+  const s = cv._scale;
+  if (!cacheOK || BG[curB].width !== cv.width || BG[curB].height !== cv.height) {
+    planCity(); renderBg(BG[curB]); renderLit(); for (const sg of signs) renderSign(sg); boardKey = ''; oldB = -1; cacheOK = true;
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1;
+  ctx.drawImage(BG[curB], 0, 0);
+  if (oldB >= 0) {
+    const e = Math.min(1, (now - morphT0) / MORPH_MS);
+    if (e < 1) { ctx.globalAlpha = 1 - ease(e); ctx.drawImage(BG[oldB], 0, 0); ctx.globalAlpha = 1; } else oldB = -1;
+  }
+  // 窗户：每栋楼从下往上亮到它那一段频率的音量；最高处留一排"峰值"慢慢落下
+  for (const b of blocks) {
+    const hgt = H - b.top, x0 = Math.max(0, Math.floor(b.x * s)), x1 = Math.min(cv.width, Math.ceil((b.x + b.w) * s));
+    if (x1 <= x0) continue;
+    const y = Math.max(0, Math.floor((H - b.level * hgt) * s)), h = cv.height - y;
+    if (h > 0) ctx.drawImage(LIT, x0, y, x1 - x0, h, x0, y, x1 - x0, h);
+    if (b.peak > b.level + 0.03) {
+      const py = Math.max(0, Math.floor((H - b.peak * hgt) * s)), ph = Math.ceil(WIN_DY * s);
+      ctx.globalAlpha = 0.85; ctx.drawImage(LIT, x0, py, x1 - x0, ph, x0, py, x1 - x0, ph); ctx.globalAlpha = 1;
+    }
+  }
+  ctx.setTransform(s, 0, 0, s, 0, 0);
+  for (const sg of signs) {
+    if (!sg.spr || sg.sprS !== s) renderSign(sg);
+    ctx.globalAlpha = 1; ctx.drawImage(sg.spr[0], sg.x - sg.pad, sg.y - sg.pad, sg.w + sg.pad * 2, sg.h + sg.pad * 2);
+    ctx.globalAlpha = sg.on; ctx.drawImage(sg.spr[1], sg.x - sg.pad, sg.y - sg.pad, sg.w + sg.pad * 2, sg.h + sg.pad * 2);
+  }
+  ctx.globalAlpha = 1;
+  if (P.showTrack === 1) {
+    renderBoard();
+    if (boardSpr && board) {
+      ctx.globalAlpha = 0.85 + 0.15 * AU.flash;
+      ctx.drawImage(boardSpr, board.x - boardSpr.pad, board.y - boardSpr.pad, board.w + boardSpr.pad * 2, board.h + 14 + boardSpr.pad * 2);
+      ctx.globalAlpha = 1;
+    }
+  }
+  drawRain();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+}
+
+/* ======================================================================
+   浏览器里单独打开：示例图标，可以拖
+   ====================================================================== */
+const desktop = document.getElementById('desktop');
+const SAMPLE = [['回收站', '#7b8fb5'], ['此电脑', '#2f7de1'], ['项目资料', '#e3a32f'], ['设计稿', '#db2777'], ['周报.xlsx', '#107c41'],
+  ['合同.pdf', '#d33a2c'], ['Chrome', '#f59e0b'], ['VS Code', '#2563eb'], ['Figma', '#8b5cf6'], ['Steam', '#334155'],
+  ['照片', '#0ea5a4'], ['下载', '#e3a32f'], ['笔记.txt', '#64748b'], ['Blender', '#ea7a1e'], ['OBS', '#4b5563'],
+  ['音乐', '#e8553e'], ['截图.png', '#16a34a'], ['备份.zip', '#8a6d3b'], ['Notion', '#1f2937'], ['游戏', '#7c3aed']];
+let grid = { cols: 1, rows: 1 }, drag = null;
+const cellPos = (c, r) => ({ x: GRID_X0 + c * CELL_W, y: GRID_Y0 + r * CELL_H });
+function addIcon([name, color], pos) {
+  const el = document.createElement('div');
+  el.className = 'icon';
+  el.innerHTML = `<div class="glyph" style="background:${color}">${[...name][0]}</div><div class="label">${name}</div>`;
+  el.style.left = pos.x + 'px'; el.style.top = pos.y + 'px';
+  desktop.appendChild(el);
+  const ic = { x: pos.x, y: pos.y, w: el.offsetWidth, h: el.offsetHeight, el };
+  icons.push(ic);
+  el.addEventListener('pointerdown', e => { if (e.button) return; el.setPointerCapture(e.pointerId); el.classList.remove('settle'); drag = { ic, sx: e.clientX, sy: e.clientY, ox: ic.x, oy: ic.y }; });
+  el.addEventListener('pointermove', e => { if (!drag || drag.ic !== ic) return; el.classList.add('drag'); el.style.left = drag.ox + e.clientX - drag.sx + 'px'; el.style.top = drag.oy + e.clientY - drag.sy + 'px'; });
+  el.addEventListener('pointerup', e => {
+    if (!drag || drag.ic !== ic) return;
+    const d = drag; drag = null; el.classList.remove('drag');
+    const cx = d.ox + e.clientX - d.sx + ic.w / 2, cy = d.oy + e.clientY - d.sy + ic.h / 2;
+    let best = null, bd = Infinity;
+    for (let c = 0; c < grid.cols; c++) for (let r = 0; r < grid.rows; r++) {
+      const p = cellPos(c, r);
+      if (icons.some(o => o !== ic && Math.abs(o.x - p.x) < 2 && Math.abs(o.y - p.y) < 2)) continue;
+      const dd = Math.hypot(p.x + CELL_W / 2 - cx, p.y + CELL_H / 2 - cy);
+      if (dd < bd) { bd = dd; best = p; }
+    }
+    if (!best) best = { x: d.ox, y: d.oy };
+    el.classList.add('settle'); ic.x = best.x; ic.y = best.y; el.style.left = best.x + 'px'; el.style.top = best.y + 'px';
+    if (best.x !== d.ox || best.y !== d.oy) commit(false);
+  });
+  return ic;
+}
+function sampleLayout() {
+  grid.cols = Math.max(1, Math.floor((W - GRID_X0) / CELL_W)); grid.rows = Math.max(1, Math.floor((H - TASKBAR - GRID_Y0) / CELL_H));
+  const cells = [];
+  for (let r = 0; r < grid.rows; r++) cells.push([0, r]);
+  for (let r = 0; r < Math.min(5, grid.rows); r++) cells.push([1, r]);
+  const mc = Math.floor(grid.cols * 0.55), mr = Math.floor(grid.rows * 0.3);
+  for (const [dc, dr] of [[0, 0], [1, 0], [0, 1], [1, 1], [2, 1]]) cells.push([mc + dc, mr + dr]);
+  let i = 0;
+  for (const [c, r] of cells) if (c < grid.cols && r < grid.rows) addIcon(SAMPLE[i++ % SAMPLE.length], cellPos(c, r));
+}
+const hint = document.getElementById('hint');
+addEventListener('keydown', e => {
+  if (WALL || PREVIEW) return;
+  if (e.key === 'r' || e.key === 'R') reseed((Math.random() * 1e6) | 0);
+  else if (e.key === 'h' || e.key === 'H') hint.classList.toggle('hidden');
+});
+let resizeT = 0;
+addEventListener('resize', () => {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(() => { resize(); commit(false); }, 100);
+});
+
+/* ======================================================================
+   托管模式（和其他主题一样的消息）
+   ====================================================================== */
+function reseed(v) { seed = v; if (iconsSeen) commit(true); }
+function applySettings(v) {
+  if (typeof v.seed === 'number' && v.seed !== seed) reseed(v.seed);
+  let plan = false;
+  for (const k in v) {
+    if (!(k in LIMITS) || typeof v[k] !== 'number' || !isFinite(v[k])) continue;
+    let x = clamp(v[k], LIMITS[k][0], LIMITS[k][1]);
+    if (INTS.has(k)) x = Math.round(x);
+    if (P[k] === x) continue;
+    P[k] = x;
+    if (k === 'neon') plan = true;
+    if (k === 'audio') syncAudio();
+    if (k === 'albumTint' || k === 'showTrack') syncMedia();
+  }
+  if (plan) commit(false);
+}
+function drawGhosts() {
+  document.getElementById('ghosts').innerHTML = icons.map(ic => `<div class="ghost" style="left:${ic.x}px;top:${ic.y}px;width:${ic.w}px;height:${ic.h}px"><i></i><b></b></div>`).join('');
+}
+function startHostedMode() {
+  document.body.classList.add('wall');
+  if (PREVIEW) {
+    document.body.classList.add('preview');
+    const g = document.createElement('div'); g.id = 'ghosts'; document.body.appendChild(g);
+  }
+  icons = [];
+  commit(true);
+  let first = true;
+  const handle = m => {
+    if (m.t === 'pause') { paused = PREVIEW ? false : !!m.v; return; }
+    if (m.t === 'settings') { applySettings(m.v || {}); return; }
+    if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
+    if (m.t !== 'icons') return;
+    const k = window.devicePixelRatio || 1;
+    icons = m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : [];
+    if (PREVIEW) drawGhosts();
+    iconsSeen = true;
+    commit(first);
+    first = false;
+  };
+  if (PREVIEW) {
+    addEventListener('message', ev => { if (ev.source === parent) handle(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data); });
+    parent.postMessage(JSON.stringify({ t: 'ready' }), '*');
+    return;
+  }
+  const host = window.chrome && window.chrome.webview;
+  if (!host) return;
+  host.addEventListener('message', ev => handle(JSON.parse(ev.data)));
+  host.postMessage('ready');
+}
+
+/* ---------- 启动 ---------- */
+window.__dbg = {
+  P, AU, commit, reseed, applySettings,
+  bench() {
+    const ts = [];
+    for (let i = 0; i < 10; i++) { const a = performance.now(); draw(performance.now()); ts.push(performance.now() - a); }
+    ts.sort((a, b) => a - b);
+    const a = performance.now(); commit(false); const c = performance.now() - a;
+    return { frame: +ts[5].toFixed(2), commit: +c.toFixed(1), canvas: cv.width + 'x' + cv.height, blocks: blocks.length, signs: signs.length, drops: drops.length, board: !!board };
+  },
+};
+resize();
+if (WALL || PREVIEW) startHostedMode();
+else { sampleLayout(); commit(true); }
+syncAudio();
+syncMedia();
+requestAnimationFrame(frame);
+</script>
+<script src="share.js"></script>
+</body>
+</html>

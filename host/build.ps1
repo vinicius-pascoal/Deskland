@@ -52,12 +52,20 @@ using System.Reflection;
 [assembly: AssemblyCopyright("Copyright 2026 Deskland authors")]
 "@
 [IO.File]::WriteAllText($versionSource, $versionText, (New-Object Text.UTF8Encoding($false)))
+# "正在播放"用到 Windows 自带的 WinRT 元数据（System32\WinMetadata）和 .NET Framework 的 WinRT 门面程序集，不需要 Windows SDK
+$fw = Split-Path $csc
+$winmd = Join-Path $env:WINDIR 'System32\WinMetadata'
+$winrt = @("$fw\System.Runtime.dll", "$fw\System.Runtime.WindowsRuntime.dll", "$fw\System.Runtime.InteropServices.WindowsRuntime.dll",
+    "$winmd\Windows.Foundation.winmd", "$winmd\Windows.Media.winmd", "$winmd\Windows.Storage.winmd")
+foreach ($f in $winrt) { if (-not (Test-Path -LiteralPath $f)) { throw "找不到 $f（需要 Windows 10 1809 或更新版本构建）" } }
+$winrtRefs = $winrt | ForEach-Object { "/r:$_" }
 & $csc /nologo /target:winexe /platform:x64 /optimize+ /codepage:65001 /win32manifest:"$root\app.manifest" `
     /win32icon:"$root\DesklandPreview.ico" `
     /out:"$bin\Deskland.exe" `
     /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll `
     /r:"$lib\Microsoft.Web.WebView2.Core.dll" /r:"$lib\Microsoft.Web.WebView2.WinForms.dll" `
-    "$root\DesktopHost.cs" "$root\Themes.cs" "$root\AudioLoopback.cs" "$versionSource"
+    $winrtRefs `
+    "$root\DesktopHost.cs" "$root\Themes.cs" "$root\AudioLoopback.cs" "$root\MediaInfo.cs" "$versionSource"
 if ($LASTEXITCODE -ne 0) { throw '编译失败' }
 foreach ($assembly in $assemblies) { Copy-Item -LiteralPath (Join-Path $lib $assembly.Name) -Destination $bin -Force }
 Copy-Item -LiteralPath (Join-Path $root 'DesklandPreview.ico') -Destination (Join-Path $bin 'DesklandPreview.ico') -Force

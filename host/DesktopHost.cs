@@ -1234,7 +1234,7 @@ class WallpaperForm : Form
     }
     public void Reload()
     {
-        SystemStats.Unsubscribe(this); AudioFeed.Unsubscribe(this);                     // 新页面需要的话会重新请求
+        SystemStats.Unsubscribe(this); AudioFeed.Unsubscribe(this); MediaFeed.Unsubscribe(this);                     // 新页面需要的话会重新请求
         if (web.CoreWebView2 == null) return;
         try { web.CoreWebView2.Reload(); }
         catch (InvalidOperationException ex) { WebDead(ex); }
@@ -1285,7 +1285,7 @@ class WallpaperForm : Form
     {
         page = newPage;
         ThemeId = themeId;
-        SystemStats.Unsubscribe(this); AudioFeed.Unsubscribe(this);
+        SystemStats.Unsubscribe(this); AudioFeed.Unsubscribe(this); MediaFeed.Unsubscribe(this);
         if (web.CoreWebView2 == null) return;
         try { web.CoreWebView2.Navigate(PageUrl); }
         catch (InvalidOperationException ex) { WebDead(ex); }
@@ -1328,6 +1328,9 @@ class WallpaperForm : Form
                 // 跟着音乐动的主题要系统正在播放的声音的频谱
                 if (msg == "audio|on") { AudioFeed.Subscribe(this); return; }
                 if (msg == "audio|off") { AudioFeed.Unsubscribe(this); return; }
+                // 正在播放的曲名、封面主色（Windows 媒体控件）
+                if (msg == "media|on") { MediaFeed.Subscribe(this); return; }
+                if (msg == "media|off") { MediaFeed.Unsubscribe(this); return; }
                 core.PostWebMessageAsString(ScreensJson());
                 if (SettingsJson != null) core.PostWebMessageAsString(SettingsJson());
                 lastIcons = ""; lastPause = -1; PollIcons(); PollForeground();
@@ -1587,6 +1590,7 @@ class WallpaperForm : Form
         lastPause = p;
         Post("{\"t\":\"pause\",\"v\":" + (pause ? "true" : "false") + "}");
         AudioFeed.Refresh();
+        MediaFeed.Refresh();
         Log.Write(screenName + (pause ? "：暂停（有窗口最大化 / 全屏，或手动暂停）" + (pauseBy == "" ? "" : "，窗口类 " + pauseBy) : "：继续播放"));
     }
 
@@ -1595,7 +1599,7 @@ class WallpaperForm : Form
     {
         if (shuttingDown) return;
         shuttingDown = true;
-        SystemStats.Unsubscribe(this); AudioFeed.Unsubscribe(this);
+        SystemStats.Unsubscribe(this); AudioFeed.Unsubscribe(this); MediaFeed.Unsubscribe(this);
         iconTimer.Stop(); fgTimer.Stop();
         ours.Remove(ownHandle);
         IntPtr parent = parentHwnd;
@@ -1611,7 +1615,7 @@ class WallpaperForm : Form
     {
         if (winEventHook != IntPtr.Zero) { Native.UnhookWinEvent(winEventHook); winEventHook = IntPtr.Zero; }
         iconTimer.Stop(); fgTimer.Stop();
-        SystemStats.Unsubscribe(this); AudioFeed.Unsubscribe(this);
+        SystemStats.Unsubscribe(this); AudioFeed.Unsubscribe(this); MediaFeed.Unsubscribe(this);
         ours.Remove(ownHandle);                          // 共用的 IconReader 由 HostContext 退出时释放
         base.OnHandleDestroyed(e);
     }
@@ -1747,6 +1751,68 @@ static class AudioFeed
         sentSeq = s;
         string json = capture.Latest;
         if (json == null) return;
+        foreach (var f in new List<WallpaperForm>(subs)) if (!f.Paused) f.Post(json);
+    }
+}
+
+// 正在播放：页面发来 "media|on" 才订阅；有订阅且没全部暂停时，后台线程每秒读一次系统媒体控件
+static class MediaFeed
+{
+    static readonly HashSet<WallpaperForm> subs = new HashSet<WallpaperForm>();
+    static MediaInfo reader;
+    static System.Windows.Forms.Timer timer;
+    static int sentSeq = -1;
+    static bool unsupportedLogged;
+
+    public static void Subscribe(WallpaperForm f)
+    {
+        subs.Add(f);
+        if (reader != null && !f.Paused) f.Post(reader.Latest);   // 新页面不用等下一次变化
+        Refresh();
+    }
+    public static void Unsubscribe(WallpaperForm f) { if (subs.Remove(f)) Refresh(); }
+
+    public static void Refresh()
+    {
+        bool want = false;
+        foreach (var f in subs) if (!f.Paused) { want = true; break; }
+        if (want && reader == null)
+        {
+            if (!MediaInfo.Supported)
+            {
+                if (!unsupportedLogged) { unsupportedLogged = true; Log.Write("正在播放：需要 Windows 10 1809 或更新版本"); }
+                foreach (var f in subs) f.Post(MediaInfo.OffJson);
+                return;
+            }
+            MediaInfo.Log = msg => Log.Write(msg);
+            try { reader = StartReader(); }
+            catch (Exception ex) { Log.Write("正在播放：无法启动（" + ex.GetType().Name + "）"); return; }
+            sentSeq = -1;
+            timer = new System.Windows.Forms.Timer();
+            timer.Interval = 250;
+            timer.Tick += delegate { Pump(); };
+            timer.Start();
+            Log.Write("正在播放：开始");
+        }
+        else if (!want && reader != null)
+        {
+            timer.Stop(); timer.Dispose(); timer = null;
+            reader.Dispose(); reader = null;
+            Log.Write("正在播放：停止");
+        }
+        else if (want) sentSeq = -1;                       // 有页面从暂停恢复：把最新状态再发一遍
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    static MediaInfo StartReader() { return new MediaInfo(); }
+
+    static void Pump()
+    {
+        if (reader == null) return;
+        int s = reader.Seq;
+        if (s == sentSeq) return;
+        sentSeq = s;
+        string json = reader.Latest;
         foreach (var f in new List<WallpaperForm>(subs)) if (!f.Paused) f.Post(json);
     }
 }

@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deskland · 锦鲤池（原型）</title>
+<!--
+  Deskland · 锦鲤池（俯看池塘；Canvas 2D）
+  - 每个图标落在一片睡莲叶上；空旷的水面零星漂着几丛睡莲和莲花
+  - 锦鲤在水下游，从叶子底下穿过；水底有晃动的光纹（焦散）
+  - 跟着声音（默认开启）：低音和节拍在水面激起涟漪、锦鲤受惊加速，高音让水里冒泡，音量越大光纹越亮
+  - 跟着专辑封面变色（默认关闭）：莲花和光纹染上正在播放的曲目封面的主色
+  性能：水底、叶子和花全部画进静态缓存（图标变了才重画，新旧交叉淡入）；
+  每帧只贴两张缓存、两层焦散图案，再画几条鱼和一些圆圈
+-->
+<style>
+  :root { --taskbar: 48px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #123c45; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif; }
+  #art { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #desktop { position: fixed; left: 0; top: 0; right: 0; bottom: var(--taskbar); }
+  .icon {
+    position: absolute; width: 76px; padding: 4px 2px 5px;
+    display: flex; flex-direction: column; align-items: center;
+    border: 1px solid transparent; border-radius: 4px;
+    user-select: none; touch-action: none; cursor: default;
+  }
+  .icon:hover { background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.2); }
+  .icon.drag { opacity: .88; z-index: 10; transform: scale(1.04); }
+  .icon.settle { transition: left .22s cubic-bezier(.2,.8,.3,1), top .22s cubic-bezier(.2,.8,.3,1); }
+  .glyph { width: 48px; height: 48px; border-radius: 10px; display: grid; place-items: center; color: #fff;
+    font-size: 21px; font-weight: 700; box-shadow: 0 2px 6px rgba(0,0,0,.35); pointer-events: none; }
+  .label {
+    margin-top: 3px; max-width: 72px; font-size: 12px; line-height: 15px; color: #fff; text-align: center;
+    text-shadow: 0 0 2px rgba(0,0,0,.95), 0 1px 3px rgba(0,0,0,.85);
+    word-break: break-all; overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; pointer-events: none;
+  }
+  #taskbar {
+    position: fixed; left: 0; right: 0; bottom: 0; height: var(--taskbar);
+    background: rgba(18,34,36,.62); backdrop-filter: blur(28px) saturate(1.6); -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    border-top: 1px solid rgba(255,255,255,.08); z-index: 40;
+  }
+  #hint {
+    position: fixed; top: 14px; right: 14px; padding: 10px 14px; border-radius: 10px; z-index: 50;
+    background: rgba(10,34,38,.72); color: #e6fff8; font-size: 12px; line-height: 1.6;
+    border: 1px solid rgba(255,255,255,.14); backdrop-filter: blur(16px);
+  }
+  #hint.hidden { display: none; }
+  body.wall #desktop, body.wall #taskbar, body.wall #hint { display: none; }
+  #ghosts { position: fixed; inset: 0; pointer-events: none; display: none; }
+  body.preview #ghosts { display: block; }
+  .ghost { position: absolute; }
+  .ghost i { position: absolute; left: 50%; top: 4px; width: 48px; height: 48px; margin-left: -24px; border-radius: 9px;
+    background: rgba(255,255,255,.88); box-shadow: 3px 6px 8px rgba(0,0,0,.35); }
+  .ghost b { position: absolute; left: 14%; right: 14%; top: 60px; height: 10px; border-radius: 5px; background: rgba(255,255,255,.75); }
+</style>
+</head>
+<body>
+<canvas id="art"></canvas>
+<div id="desktop"></div>
+<div id="taskbar"></div>
+<div id="hint"><b>Deskland · 锦鲤池</b><br>拖动图标，睡莲叶会跟着移动<br>放点音乐：涟漪、气泡跟着节奏<br>R 换一张 · H 隐藏提示</div>
+<script src="audio.js"></script>
+<script src="media.js"></script>
+
+<script>
+'use strict';
+
+/* ======================================================================
+   参数（默认值和 themes.json 里锦鲤池主题的 default 保持一致）
+   ====================================================================== */
+const CELL_W = 76, CELL_H = 100, GRID_X0 = 4, GRID_Y0 = 6, TASKBAR = 48;
+const FS = 6;                 // 水底颜色场的格子（CSS 像素）
+const MORPH_MS = 1200;
+
+const QS = new URLSearchParams(location.search);
+const WALL = QS.has('wallpaper');
+const PREVIEW = QS.has('preview');
+const P = { koi: 5, pads: 0.5, flow: 1, audio: 1, albumTint: 0 };
+const DEFAULTS = Object.assign({}, P);
+const LIMITS = { koi: [0, 8], pads: [0, 1], flow: [0, 3], audio: [0, 1], albumTint: [0, 1] };
+const INTS = new Set(['koi', 'audio', 'albumTint']);
+
+const cv = document.getElementById('art');
+const ctx = cv.getContext('2d', { alpha: false });
+let W = innerWidth, H = innerHeight;
+let icons = [];
+let seed = QS.has('seed') ? (+QS.get('seed') | 0) : (Math.random() * 1e6) | 0;
+
+/* ======================================================================
+   噪声、小工具
+   ====================================================================== */
+function hash2(x, y, k) {
+  let h = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ Math.imul((seed + k) | 0, 2246822519);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function vnoise(x, y, k) {
+  const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+  const a = hash2(xi, yi, k), b = hash2(xi + 1, yi, k), c = hash2(xi, yi + 1, k), d = hash2(xi + 1, yi + 1, k);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+function fbm(x, y, k, oct) {
+  let s = 0, a = 0.5, n = 0;
+  for (let o = 0; o < oct; o++) { s += a * vnoise(x, y, k + o * 17); n += a; x = x * 2.03 + 17.1; y = y * 2.03 - 9.7; a *= 0.5; }
+  return s / n;
+}
+function mulberry32(a) {
+  return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const ease = t => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+const hex = c => [parseInt(c.slice(1, 3), 16), parseInt(c.slice(3, 5), 16), parseInt(c.slice(5, 7), 16)];
+const rgb = (a, al) => al === undefined ? `rgb(${a[0] | 0},${a[1] | 0},${a[2] | 0})` : `rgba(${a[0] | 0},${a[1] | 0},${a[2] | 0},${al})`;
+const mixc = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+// 封面颜色可能很暗或很灰：调成适合当花、当光的明亮颜色
+function brighten(c, minL) {
+  let [r, g, b] = c.map(v => v / 255);
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2;
+  if (l < minL) { const k = (minL - l) / (1 - l + 1e-6); r += (1 - r) * k; g += (1 - g) * k; b += (1 - b) * k; }
+  return [r * 255, g * 255, b * 255];
+}
+
+/* ======================================================================
+   水底（只跟种子和屏幕大小有关）：深浅不一的青绿，几块长青苔的暗处，沉在水底的石头
+   ====================================================================== */
+const bottom = document.createElement('canvas');
+let bottomOK = false;
+const grainTile = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d'), im = g.createImageData(128, 128), r = mulberry32(7);
+  for (let i = 0; i < im.data.length; i += 4) { const v = 128 + (r() - 0.5) * 80; im.data[i] = im.data[i + 1] = im.data[i + 2] = v; im.data[i + 3] = 255; }
+  g.putImageData(im, 0, 0); return c;
+})();
+const SHALLOW = [74, 132, 118], DEEP = [16, 58, 66], MOSS = [38, 78, 46], SAND = [120, 150, 120];
+function renderBottom() {
+  const s = cv._scale;
+  bottom.width = cv.width; bottom.height = cv.height;
+  const Gw = Math.ceil(W / FS) + 2, Gh = Math.ceil(H / FS) + 2;
+  const lo = document.createElement('canvas'); lo.width = Gw; lo.height = Gh;
+  const lc = lo.getContext('2d'), im = lc.createImageData(Gw, Gh), d = im.data;
+  for (let j = 0, k = 0; j < Gh; j++) for (let i = 0; i < Gw; i++, k += 4) {
+    const x = i * FS, y = j * FS;
+    const depth = clamp(0.25 + 0.75 * fbm(x / 520, y / 520, 3, 4) + (x + y) / (W + H) * 0.25 - 0.2, 0, 1);
+    const moss = smooth(0.55, 0.78, fbm(x / 180, y / 180, 9, 4)) * 0.55;
+    const sand = smooth(0.62, 0.85, fbm(x / 300 + 9, y / 300, 21, 3)) * (1 - depth) * 0.5;
+    let c = mixc(SHALLOW, DEEP, depth);
+    c = mixc(c, MOSS, moss); c = mixc(c, SAND, sand);
+    const v = 1 - 0.35 * (((x / W) - 0.5) ** 2 + ((y / H) - 0.5) ** 2);       // 暗角
+    d[k] = c[0] * v; d[k + 1] = c[1] * v; d[k + 2] = c[2] * v; d[k + 3] = 255;
+  }
+  lc.putImageData(im, 0, 0);
+  const c = bottom.getContext('2d', { alpha: false });
+  c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'high';
+  c.drawImage(lo, 0, 0, Gw, Gh, 0, 0, Gw * FS * s, Gh * FS * s);
+  // 水底的鹅卵石：几片一簇，边缘柔和
+  c.setTransform(s, 0, 0, s, 0, 0);
+  const r = mulberry32(seed ^ 0x9e37);
+  const nClusters = Math.round(W * H / 260000);
+  for (let n = 0; n < nClusters; n++) {
+    const cx = r() * W, cy = r() * H;
+    for (let i = 0, m = 3 + (r() * 6 | 0); i < m; i++) {
+      const x = cx + (r() - 0.5) * 70, y = cy + (r() - 0.5) * 50, rx = 6 + r() * 14, ry = rx * (0.55 + r() * 0.3), a = r() * 3;
+      const tone = 0.7 + r() * 0.5;
+      c.fillStyle = `rgba(${40 * tone | 0},${62 * tone | 0},${58 * tone | 0},0.55)`;
+      c.beginPath(); c.ellipse(x + 2, y + 3, rx, ry, a, 0, 6.283); c.fill();
+      c.fillStyle = `rgba(${96 * tone | 0},${118 * tone | 0},${104 * tone | 0},0.5)`;
+      c.beginPath(); c.ellipse(x, y, rx, ry, a, 0, 6.283); c.fill();
+    }
+  }
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.globalCompositeOperation = 'overlay'; c.globalAlpha = 0.07;
+  c.fillStyle = c.createPattern(grainTile, 'repeat'); c.fillRect(0, 0, bottom.width, bottom.height);
+  c.globalCompositeOperation = 'source-over'; c.globalAlpha = 1;
+  bottomOK = true;
+}
+
+/* ======================================================================
+   焦散（阳光透过水面在水底的光纹）：一张可平铺的 Voronoi 边缘图，两层错开慢慢漂
+   ====================================================================== */
+const caustic = (() => {
+  const N = 256, c = document.createElement('canvas'); c.width = c.height = N;
+  const g = c.getContext('2d'), im = g.createImageData(N, N), r = mulberry32(4242);
+  const pts = []; for (let i = 0; i < 26; i++) pts.push([r() * N, r() * N]);
+  const T = 6.2832 / N;
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    // 先把坐标按周期函数扭一扭（仍可平铺）：Voronoi 的直边变成弯弯的光纹
+    const wx = x + 9 * Math.sin(y * T * 2 + 1.3) + 4 * Math.sin(y * T * 5), wy = y + 9 * Math.sin(x * T * 3 + 0.4) + 4 * Math.sin(x * T * 4 + 2);
+    let f1 = 1e9, f2 = 1e9;
+    for (const [px, py] of pts) for (let oy = -N; oy <= N; oy += N) for (let ox = -N; ox <= N; ox += N) {
+      const dd = Math.hypot(wx - px - ox, wy - py - oy);
+      if (dd < f1) { f2 = f1; f1 = dd; } else if (dd < f2) f2 = dd;
+    }
+    const v = Math.pow(1 - smooth(0, 13, f2 - f1), 3);
+    const o = (y * N + x) * 4;
+    im.data[o] = im.data[o + 1] = im.data[o + 2] = 255; im.data[o + 3] = v * 255;
+  }
+  g.putImageData(im, 0, 0);
+  return c;
+})();
+let causticTint = null, causticTintKey = '';
+function causticSprite(col) {                       // 光纹染色：只在颜色变了时重画一次
+  const key = col.map(v => v | 0).join(',');
+  if (causticTint && key === causticTintKey) return causticTint;
+  const c = document.createElement('canvas'); c.width = c.height = caustic.width;
+  const g = c.getContext('2d');
+  g.drawImage(caustic, 0, 0); g.globalCompositeOperation = 'source-in'; g.fillStyle = rgb(col); g.fillRect(0, 0, c.width, c.height);
+  causticTint = c; causticTintKey = key; causticPat = null;
+  return c;
+}
+let causticPat = null;
+
+/* ======================================================================
+   睡莲叶：每个图标下面一片；空旷水面上零星几丛（有的开着莲花）
+   ====================================================================== */
+let pads = [];
+function rectGap(ic, x, y) {
+  const dx = Math.max(ic.x - x, 0, x - ic.x - ic.w), dy = Math.max(ic.y - y, 0, y - ic.y - ic.h);
+  return Math.hypot(dx, dy);
+}
+function planPads() {
+  const list = [];
+  for (const ic of icons) {
+    const cx = ic.x + ic.w / 2, cy = ic.y + Math.min(ic.h, 96) * 0.4;
+    const h = hash2(Math.round(cx), Math.round(cy), 5);
+    list.push({ x: cx, y: cy, r: 35 + h * 6, rot: h * 6.283, notch: 0.42 + h * 0.2, tone: hash2(Math.round(cx), Math.round(cy), 6), icon: true });
+  }
+  const DH = H - TASKBAR, r = mulberry32(seed * 3 + 11);
+  const target = Math.round(W * DH / 1e6 * 10 * P.pads);
+  let clusters = 0, tries = 0;
+  while (clusters < target && tries++ < 400) {
+    const x = 40 + r() * (W - 80), y = 40 + r() * (DH - 80);
+    if (icons.some(ic => rectGap(ic, x, y) < 95)) continue;
+    if (list.some(p => !p.icon && Math.hypot(p.x - x, p.y - y) < 160)) continue;
+    clusters++;
+    const n = 1 + (r() * 4 | 0);
+    for (let i = 0; i < n; i++) {
+      const pr = 14 + r() * 20, a = r() * 6.283, d = i ? 18 + r() * 26 : 0;
+      const px = x + Math.cos(a) * d, py = y + Math.sin(a) * d;
+      if (icons.some(ic => rectGap(ic, px, py) < pr + 30)) continue;
+      list.push({ x: px, y: py, r: pr, rot: r() * 6.283, notch: 0.4 + r() * 0.25, tone: r(), flower: i === 0 && r() < 0.55 });
+    }
+  }
+  pads = list;
+}
+function padPath(c, p) {
+  const n0 = p.rot, n1 = p.rot + p.notch;           // 叶子上的缺口（楔形）
+  c.beginPath(); c.moveTo(p.x, p.y);
+  c.arc(p.x, p.y, p.r, n1, n0 + 6.283);
+  c.closePath();
+}
+const FLOWER_DEFAULT = [244, 163, 192];
+function flowerColor() {
+  const cols = mediaColors();
+  return cols ? brighten(cols[0], 0.62) : FLOWER_DEFAULT;
+}
+function renderSurface(dst) {
+  dst.width = cv.width; dst.height = cv.height;
+  const c = dst.getContext('2d'), s = cv._scale;
+  c.setTransform(s, 0, 0, s, 0, 0);
+  // 叶子投在水底的影子（右下方）
+  c.fillStyle = 'rgba(4,22,24,0.28)';
+  for (const p of pads) { c.save(); c.translate(9, 13); padPath(c, p); c.fill(); c.restore(); }
+  const fc = flowerColor();
+  for (const p of pads) {
+    const g = c.createRadialGradient(p.x - p.r * 0.3, p.y - p.r * 0.35, p.r * 0.1, p.x, p.y, p.r);
+    const base = mixc([74, 128, 52], [52, 104, 46], p.tone);
+    g.addColorStop(0, rgb(mixc(base, [168, 198, 112], 0.45))); g.addColorStop(0.75, rgb(base)); g.addColorStop(1, rgb(mixc(base, [30, 62, 34], 0.5)));
+    c.fillStyle = g; padPath(c, p); c.fill();
+    c.strokeStyle = 'rgba(28,60,30,0.55)'; c.lineWidth = 1.1; c.stroke();
+    // 叶脉：从叶心放射出去
+    c.strokeStyle = 'rgba(200,226,150,0.28)'; c.lineWidth = 0.8;
+    c.beginPath();
+    for (let a = p.rot + p.notch + 0.3; a < p.rot + 6.283 - 0.15; a += 0.48) { c.moveTo(p.x, p.y); c.lineTo(p.x + Math.cos(a) * p.r * 0.9, p.y + Math.sin(a) * p.r * 0.9); }
+    c.stroke();
+    // 一点水珠的高光
+    if (p.r > 20) { c.fillStyle = 'rgba(255,255,255,0.5)'; c.beginPath(); c.arc(p.x + p.r * 0.35, p.y - p.r * 0.2, 1.4, 0, 6.283); c.fill(); }
+  }
+  for (const p of pads) if (p.flower) drawLotus(c, p.x + p.r * 0.15, p.y - p.r * 0.1, Math.max(9, p.r * 0.55), fc, p.rot);
+  c.setTransform(1, 0, 0, 1, 0, 0);
+}
+function drawLotus(c, x, y, R, col, rot) {
+  const dark = mixc(col, [120, 40, 80], 0.35), light = mixc(col, [255, 255, 255], 0.45);
+  for (const [k, n, off] of [[1, 8, 0], [0.68, 6, 0.4], [0.42, 5, 0.1]]) {
+    for (let i = 0; i < n; i++) {
+      const a = rot + off + i * 6.283 / n, px = x + Math.cos(a) * R * k * 0.45, py = y + Math.sin(a) * R * k * 0.45;
+      const g = c.createLinearGradient(x, y, px + Math.cos(a) * R * k * 0.5, py + Math.sin(a) * R * k * 0.5);
+      g.addColorStop(0, rgb(light)); g.addColorStop(1, rgb(k < 1 ? col : dark));
+      c.fillStyle = g;
+      c.beginPath(); c.ellipse(px, py, R * k * 0.5, R * k * 0.2, a, 0, 6.283); c.fill();
+    }
+  }
+  c.fillStyle = '#f4d35e'; c.beginPath(); c.arc(x, y, R * 0.14, 0, 6.283); c.fill();
+}
+
+// 两张叶子层轮换：图标变化时新旧交叉淡入
+const S = [document.createElement('canvas'), document.createElement('canvas')];
+let curS = 0, oldS = -1, morphT0 = 0, cacheOK = false;
+let iconsSeen = !(WALL || PREVIEW);
+function commit(fromEmpty) {
+  planPads();
+  if (cacheOK && !fromEmpty) { oldS = curS; curS = 1 - curS; morphT0 = performance.now(); }
+  else oldS = -1;
+  renderSurface(S[curS]);
+  cacheOK = true;
+  if (paused) { oldS = -1; draw(performance.now()); }
+}
+
+/* ======================================================================
+   锦鲤：头带着身体走（每一节跟着前一节），身体左右摆，尾鳍扇动
+   ====================================================================== */
+const KOI_STYLES = [
+  { base: [244, 238, 228], patches: [[226, 82, 42], [226, 82, 42]] },             // 红白
+  { base: [30, 30, 36], patches: [[226, 82, 42], [244, 238, 228], [226, 82, 42]] }, // 昭和三色
+  { base: [242, 182, 64], patches: [] },                                          // 黄金
+  { base: [244, 238, 228], patches: [], cap: [214, 48, 40] },                     // 丹顶
+  { base: [140, 166, 196], patches: [[232, 120, 60]] },                           // 浅黄
+  { base: [244, 238, 228], patches: [[30, 30, 36], [226, 82, 42]] },              // 大正三色
+];
+const SEGS = 9;
+let fish = [];
+function makeFish(i) {
+  const r = mulberry32(seed * 13 + i * 101), DH = H - TASKBAR;
+  const len = 74 + r() * 32, st = KOI_STYLES[(i + (seed % 3)) % KOI_STYLES.length];
+  const x = 60 + r() * (W - 120), y = 60 + r() * (DH - 120), a = r() * 6.283;
+  const seg = []; for (let k = 0; k < SEGS; k++) seg.push([x - Math.cos(a) * k * len / SEGS, y - Math.sin(a) * k * len / SEGS]);
+  const patches = st.patches.map(col => ({ col, t: 0.15 + r() * 0.6, side: (r() - 0.5) * 0.8, rx: 0.12 + r() * 0.12, ry: 0.5 + r() * 0.5 }));
+  return { x, y, a, sp: 26, len, seg, ph: r() * 6.283, st, patches, boost: 0, k: r(), nextRip: 3 + r() * 8, id: i };
+}
+function syncFish() {
+  while (fish.length < P.koi) fish.push(makeFish(fish.length));
+  fish.length = P.koi;
+}
+function stepFish(dt) {
+  const f = dt * P.flow, DH = H - TASKBAR;
+  for (const fi of fish) {
+    // 漫游：方向跟着一条慢慢变的噪声转；离边太近就往池中央拐
+    let turn = (vnoise(simT * 0.25 + fi.id * 7.1, fi.id, 41) - 0.5) * 2.4;
+    const m = 90, cx = W / 2 - fi.x, cy = DH / 2 - fi.y;
+    if (fi.x < m || fi.x > W - m || fi.y < m || fi.y > DH - m) {
+      let want = Math.atan2(cy, cx) - fi.a;
+      want = Math.atan2(Math.sin(want), Math.cos(want));
+      turn += want * 2.2;
+    }
+    for (const o of fish) {                         // 别撞到一起
+      if (o === fi) continue;
+      const dx = fi.x - o.x, dy = fi.y - o.y, d = Math.hypot(dx, dy);
+      if (d < 50 && d > 0) { let want = Math.atan2(dy, dx) - fi.a; want = Math.atan2(Math.sin(want), Math.cos(want)); turn += want * (1 - d / 50) * 1.5; }
+    }
+    fi.a += turn * f * (0.6 + fi.boost * 0.8);
+    fi.boost *= Math.exp(-dt * 1.6);
+    const target = (20 + fi.k * 14) * (1 + fi.boost * 2.4);
+    fi.sp += (target - fi.sp) * (1 - Math.exp(-dt * 3));
+    fi.x += Math.cos(fi.a) * fi.sp * f; fi.y += Math.sin(fi.a) * fi.sp * f;
+    fi.x = clamp(fi.x, -40, W + 40); fi.y = clamp(fi.y, -40, DH + 40);
+    fi.ph += f * (3.2 + fi.sp * 0.16);
+    const sl = fi.len / SEGS;
+    fi.seg[0][0] = fi.x; fi.seg[0][1] = fi.y;
+    for (let k = 1; k < SEGS; k++) {
+      const p = fi.seg[k], q = fi.seg[k - 1], dx = p[0] - q[0], dy = p[1] - q[1], d = Math.hypot(dx, dy) || 1;
+      p[0] = q[0] + dx / d * sl; p[1] = q[1] + dy / d * sl;
+    }
+    // 时不时浮上来碰一下水面
+    fi.nextRip -= f;
+    if (fi.nextRip <= 0) { fi.nextRip = 5 + Math.random() * 9; addRipple(fi.x + Math.cos(fi.a) * 4, fi.y + Math.sin(fi.a) * 4, 0.45); }
+  }
+}
+const WIDTH = [0.62, 0.92, 1, 0.94, 0.8, 0.62, 0.44, 0.28, 0.16];
+function fishOutline(fi) {
+  // 每一节加上左右摆动；越往尾巴摆得越大
+  const pts = [], nrm = [];
+  for (let k = 0; k < SEGS; k++) {
+    const a = fi.seg[Math.min(k + 1, SEGS - 1)], b = fi.seg[Math.max(k - 1, 0)];
+    let tx = b[0] - a[0], ty = b[1] - a[1]; const tl = Math.hypot(tx, ty) || 1; tx /= tl; ty /= tl;
+    const sw = Math.sin(fi.ph - k * 0.7) * (k / SEGS) * fi.len * 0.07;
+    pts.push([fi.seg[k][0] - ty * sw, fi.seg[k][1] + tx * sw]); nrm.push([-ty, tx]);
+  }
+  return [pts, nrm];
+}
+function bodyPath(c, fi, pts, nrm) {
+  const w = fi.len * 0.13;
+  c.beginPath();
+  c.moveTo(pts[0][0] + (pts[0][0] - pts[1][0]) * 0.55, pts[0][1] + (pts[0][1] - pts[1][1]) * 0.55);
+  for (let k = 0; k < SEGS; k++) c.lineTo(pts[k][0] + nrm[k][0] * w * WIDTH[k], pts[k][1] + nrm[k][1] * w * WIDTH[k]);
+  for (let k = SEGS - 1; k >= 0; k--) c.lineTo(pts[k][0] - nrm[k][0] * w * WIDTH[k], pts[k][1] - nrm[k][1] * w * WIDTH[k]);
+  c.closePath();
+}
+function tailPath(c, fi, pts, nrm) {
+  const e = pts[SEGS - 1], d = pts[SEGS - 2], dx = e[0] - d[0], dy = e[1] - d[1], dl = Math.hypot(dx, dy) || 1;
+  // 长长的飘尾（蝶尾）：两片弯弯的叶状，末端向内收，跟着摆动有一点滞后
+  const fl = Math.sin(fi.ph - SEGS * 0.7 - 0.6) * 0.55, L = fi.len * 0.36, sp = fi.len * 0.16;
+  const ux = dx / dl, uy = dy / dl, nx = -uy, ny = ux;
+  const cf = Math.cos(fl), sf = Math.sin(fl);
+  const ax = ux * cf - nx * sf, ay = uy * cf - ny * sf, bx = -ay, by = ax;
+  const tx = e[0] + ax * L, ty = e[1] + ay * L;
+  c.beginPath(); c.moveTo(e[0], e[1]);
+  c.bezierCurveTo(e[0] + ax * L * 0.3 + bx * sp * 0.9, e[1] + ay * L * 0.3 + by * sp * 0.9, tx + bx * sp * 1.2, ty + by * sp * 1.2, tx + bx * sp * 0.7 + ax * 2, ty + by * sp * 0.7 + ay * 2);
+  c.quadraticCurveTo(tx - ax * L * 0.18, ty - ay * L * 0.18, tx - bx * sp * 0.7 + ax * 2, ty - by * sp * 0.7 + ay * 2);
+  c.bezierCurveTo(tx - bx * sp * 1.2, ty - by * sp * 1.2, e[0] + ax * L * 0.3 - bx * sp * 0.9, e[1] + ay * L * 0.3 - by * sp * 0.9, e[0], e[1]);
+  c.closePath();
+}
+function drawFish(fi, shadow) {
+  const [pts, nrm] = fishOutline(fi);
+  if (shadow) {
+    ctx.save(); ctx.translate(7, 10);
+    ctx.fillStyle = 'rgba(3,20,22,0.3)';
+    bodyPath(ctx, fi, pts, nrm); ctx.fill(); tailPath(ctx, fi, pts, nrm); ctx.fill();
+    ctx.restore(); return;
+  }
+  const w = fi.len * 0.13;
+  // 尾鳍、胸鳍：半透明
+  const finCol = fi.patches.length && fi.st.base[0] < 100 ? fi.patches[0].col : fi.st.base;   // 黑底的鱼：鳍用花纹的颜色
+  ctx.fillStyle = rgb(mixc(finCol, [255, 255, 255], 0.25), 0.62);
+  tailPath(ctx, fi, pts, nrm); ctx.fill();
+  ctx.strokeStyle = rgb(mixc(finCol, [255, 255, 255], 0.5), 0.35); ctx.lineWidth = 0.7; ctx.stroke();
+  const pf = Math.sin(fi.ph * 0.8) * 0.35;
+  for (const sgn of [1, -1]) {
+    const p = pts[2], n = nrm[2];
+    const ang = Math.atan2(n[1], n[0]) * 1 + sgn * 0 + (sgn > 0 ? 0.6 + pf : -0.6 - pf);
+    ctx.beginPath(); ctx.ellipse(p[0] + n[0] * w * sgn * 0.9, p[1] + n[1] * w * sgn * 0.9, w * 0.75, w * 0.32, ang + (sgn < 0 ? Math.PI : 0), 0, 6.283); ctx.fill();
+  }
+  ctx.save();
+  bodyPath(ctx, fi, pts, nrm);
+  ctx.fillStyle = rgb(fi.st.base); ctx.fill();
+  ctx.clip();
+  for (const pa of fi.patches) {
+    const k = Math.min(SEGS - 1, Math.round(pa.t * (SEGS - 1))), p = pts[k], n = nrm[k];
+    const nx = p[0] + n[0] * w * pa.side, ny = p[1] + n[1] * w * pa.side;
+    const ang = Math.atan2(pts[Math.max(0, k - 1)][1] - pts[Math.min(SEGS - 1, k + 1)][1], pts[Math.max(0, k - 1)][0] - pts[Math.min(SEGS - 1, k + 1)][0]);
+    ctx.fillStyle = rgb(pa.col);
+    ctx.beginPath(); ctx.ellipse(nx, ny, fi.len * pa.rx, w * pa.ry * 1.2, ang, 0, 6.283); ctx.fill();
+  }
+  if (fi.st.cap) { ctx.fillStyle = rgb(fi.st.cap); ctx.beginPath(); ctx.arc(pts[1][0], pts[1][1], w * 0.5, 0, 6.283); ctx.fill(); }
+  // 背上一道高光、两侧暗一点：有点立体感
+  ctx.strokeStyle = 'rgba(255,255,255,0.28)'; ctx.lineWidth = w * 0.35; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(pts[1][0], pts[1][1]); for (let k = 2; k < SEGS - 2; k++) ctx.lineTo(pts[k][0], pts[k][1]); ctx.stroke();
+  ctx.restore();
+  // 眼睛
+  ctx.fillStyle = 'rgba(20,20,24,0.85)';
+  for (const sgn of [1, -1]) { const p = pts[0], n = nrm[0]; ctx.beginPath(); ctx.arc(p[0] + n[0] * w * 0.5 * sgn, p[1] + n[1] * w * 0.5 * sgn, 1.2, 0, 6.283); ctx.fill(); }
+}
+
+/* ======================================================================
+   涟漪、气泡
+   ====================================================================== */
+const ripples = [], bubbles = [];
+function addRipple(x, y, str) {
+  if (ripples.length >= 28) ripples.shift();
+  ripples.push({ x, y, t: 0, str: clamp(str, 0.15, 1) });
+}
+function stepRipples(dt) {
+  for (const r of ripples) r.t += dt;
+  while (ripples.length && ripples[0].t > 3.2) ripples.shift();
+  for (const b of bubbles) { b.t += dt; b.x += b.vx * dt; b.y += b.vy * dt; }
+  for (let i = bubbles.length - 1; i >= 0; i--) if (bubbles[i].t > bubbles[i].life) {
+    const b = bubbles[i]; if (b.r > 2.4) addRipple(b.x, b.y, 0.15);
+    bubbles.splice(i, 1);
+  }
+}
+function addBubble(x, y) {
+  if (bubbles.length >= 70) return;
+  bubbles.push({ x: x + (Math.random() - 0.5) * 8, y: y + (Math.random() - 0.5) * 8, vx: (Math.random() - 0.5) * 6, vy: (Math.random() - 0.5) * 6,
+    r: 1.2 + Math.random() * 2.2, t: 0, life: 0.8 + Math.random() * 1.4 });
+}
+function drawRipples() {
+  ctx.lineWidth = 1.2;
+  for (const r of ripples) {
+    const fade = Math.pow(1 - r.t / 3.2, 1.6) * r.str;
+    for (const [k, a] of [[1, 0.55], [0.62, 0.35]]) {
+      const rad = (8 + r.t * 46 * (0.7 + r.str * 0.6)) * k;
+      ctx.strokeStyle = `rgba(225,250,245,${a * fade})`;
+      ctx.beginPath(); ctx.ellipse(r.x, r.y, rad, rad * 0.92, 0, 0, 6.283); ctx.stroke();
+    }
+  }
+}
+function drawBubbles() {
+  for (const b of bubbles) {
+    const a = Math.sin(Math.PI * Math.min(1, b.t / b.life)), rr = b.r * (0.6 + 0.4 * Math.min(1, b.t * 3));
+    ctx.strokeStyle = `rgba(230,255,250,${0.7 * a})`; ctx.lineWidth = 0.8;
+    ctx.beginPath(); ctx.arc(b.x, b.y, rr, 0, 6.283); ctx.stroke();
+    ctx.fillStyle = `rgba(255,255,255,${0.8 * a})`; ctx.beginPath(); ctx.arc(b.x - rr * 0.35, b.y - rr * 0.35, rr * 0.3, 0, 6.283); ctx.fill();
+  }
+}
+
+/* ======================================================================
+   声音、专辑颜色
+   ====================================================================== */
+const AU = { lv: 0, bass: 0, high: 0, kick: 0, beat: false, glow: 0, fizz: 0 };
+let audioOff = null, mediaOff = null, media = null;
+function follow(cur, target, dt, up, down) { return cur + (target - cur) * (1 - Math.exp(-dt / (target > cur ? up : down))); }
+function syncAudio() {
+  const want = P.audio === 1 && !!window.DesklandAudio;
+  if (want && !audioOff) {
+    audioOff = DesklandAudio.subscribe(a => {
+      AU.lv = a.on ? a.lv : 0; AU.bass = a.on ? a.bass : 0; AU.high = a.on ? a.high : 0;
+      if (a.beat) AU.beat = true;
+    });
+  } else if (!want && audioOff) { audioOff(); audioOff = null; AU.lv = AU.bass = AU.high = 0; AU.beat = false; }
+}
+function syncMedia() {
+  const want = P.albumTint === 1 && !!window.DesklandMedia;
+  if (want && !mediaOff) mediaOff = DesklandMedia.subscribe(m => { const before = colorKey(); media = m.on && m.colors.length ? m.colors.slice() : null; if (colorKey() !== before && cacheOK) commit(false); });
+  else if (!want && mediaOff) { mediaOff(); mediaOff = null; const had = !!media; media = null; if (had && cacheOK) commit(false); }
+}
+const colorKey = () => media ? media.join() : '';
+function mediaColors() { return media ? media.map(hex) : null; }
+function stepAudio(dt) {
+  if (AU.beat) {
+    AU.beat = false; AU.kick = 1;
+    // 节拍：锦鲤受惊窜一下，水面一两处涟漪（低音越重涟漪越大）
+    for (const fi of fish) { fi.boost = Math.min(1.4, fi.boost + 0.5 + AU.bass * 0.6); fi.a += (Math.random() - 0.5) * 0.9; }
+    const n = AU.bass > 0.45 ? 2 : 1;
+    for (let i = 0; i < n; i++) {
+      const src = fish.length && Math.random() < 0.6 ? fish[Math.random() * fish.length | 0] : null;
+      addRipple(src ? src.x : 60 + Math.random() * (W - 120), src ? src.y : 60 + Math.random() * (H - TASKBAR - 120), 0.35 + AU.bass * 0.8);
+    }
+  }
+  AU.kick *= Math.exp(-dt * 4);
+  AU.glow = follow(AU.glow, AU.lv, dt, 0.15, 0.8);
+  AU.fizz = follow(AU.fizz, AU.high, dt, 0.08, 0.4);
+  // 高音：鱼嘴边、叶子边冒出小气泡
+  let rate = AU.fizz * 28 + 0.6;
+  for (let n = rate * dt + Math.random(); n >= 1; n--) {
+    if (fish.length && Math.random() < 0.7) { const fi = fish[Math.random() * fish.length | 0]; addBubble(fi.x + Math.cos(fi.a) * 6, fi.y + Math.sin(fi.a) * 6); }
+    else if (pads.length) { const p = pads[Math.random() * pads.length | 0], a = Math.random() * 6.283; addBubble(p.x + Math.cos(a) * (p.r + 4), p.y + Math.sin(a) * (p.r + 4)); }
+  }
+}
+
+/* ======================================================================
+   尺寸 / 主循环
+   ====================================================================== */
+function resize() {
+  const box = cv.getBoundingClientRect();
+  W = box.width || innerWidth; H = box.height || innerHeight;
+  const scale = PREVIEW ? 0.5 : (devicePixelRatio || 1);
+  cv.width = Math.round(W * scale); cv.height = Math.round(H * scale); cv._scale = scale;
+  bottomOK = false; cacheOK = false; causticPat = null;
+}
+
+let simT = 0, lastT = 0, frameN = 0, paused = false;
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (paused) { lastT = 0; return; }
+  if (lastT && now - lastT < 31) return;                 // 30fps
+  const dt = lastT ? Math.min((now - lastT) / 1000, 0.1) : 0.033;
+  lastT = now;
+  simT += dt * P.flow;
+  stepAudio(dt);
+  stepFish(dt);
+  stepRipples(dt);
+  draw(now);
+  frameN++;
+}
+function draw(now) {
+  const s = cv._scale;
+  if (!bottomOK || bottom.width !== cv.width || bottom.height !== cv.height) renderBottom();
+  if (!cacheOK || S[curS].width !== cv.width || S[curS].height !== cv.height) { renderSurface(S[curS]); oldS = -1; cacheOK = true; }
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1;
+  ctx.drawImage(bottom, 0, 0);
+  // 焦散：两层大小不同、反向漂动；音量越大越亮
+  const cols = mediaColors();
+  const tint = cols ? mixc(brighten(cols[0], 0.7), [235, 255, 245], 0.35) : [225, 255, 240];
+  const spr = causticSprite(tint);
+  if (!causticPat) causticPat = ctx.createPattern(spr, 'repeat');
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.fillStyle = causticPat;
+  const base = 0.045 + AU.glow * 0.07 + AU.kick * 0.03;
+  for (const [k, vx, vy, al] of [[2.2 * s, 9, 5, base], [3.1 * s, -6, 7, base * 0.7]]) {
+    causticPat.setTransform(new DOMMatrix().translateSelf(simT * vx * s, simT * vy * s).scaleSelf(k, k));
+    ctx.globalAlpha = al; ctx.fillRect(0, 0, cv.width, cv.height);
+  }
+  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+  ctx.setTransform(s, 0, 0, s, 0, 0);
+  for (const fi of fish) drawFish(fi, true);
+  for (const fi of fish) drawFish(fi, false);
+  drawBubbles();
+  drawRipples();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (oldS >= 0) {
+    const e = Math.min(1, (now - morphT0) / MORPH_MS);
+    if (e < 1) { ctx.globalAlpha = 1 - ease(e); ctx.drawImage(S[oldS], 0, 0); ctx.globalAlpha = ease(e); ctx.drawImage(S[curS], 0, 0); ctx.globalAlpha = 1; }
+    else { oldS = -1; ctx.drawImage(S[curS], 0, 0); }
+  } else ctx.drawImage(S[curS], 0, 0);
+}
+
+/* ======================================================================
+   浏览器里单独打开：示例图标，可以拖
+   ====================================================================== */
+const desktop = document.getElementById('desktop');
+const SAMPLE = [['回收站', '#7b8fb5'], ['此电脑', '#2f7de1'], ['项目资料', '#e3a32f'], ['设计稿', '#db2777'], ['周报.xlsx', '#107c41'],
+  ['合同.pdf', '#d33a2c'], ['Chrome', '#f59e0b'], ['VS Code', '#2563eb'], ['Figma', '#8b5cf6'], ['Steam', '#334155'],
+  ['照片', '#0ea5a4'], ['下载', '#e3a32f'], ['笔记.txt', '#64748b'], ['Blender', '#ea7a1e'], ['OBS', '#4b5563'],
+  ['音乐', '#e8553e'], ['截图.png', '#16a34a'], ['备份.zip', '#8a6d3b'], ['Notion', '#1f2937'], ['游戏', '#7c3aed']];
+let grid = { cols: 1, rows: 1 }, drag = null;
+const cellPos = (c, r) => ({ x: GRID_X0 + c * CELL_W, y: GRID_Y0 + r * CELL_H });
+function addIcon([name, color], pos) {
+  const el = document.createElement('div');
+  el.className = 'icon';
+  el.innerHTML = `<div class="glyph" style="background:${color}">${[...name][0]}</div><div class="label">${name}</div>`;
+  el.style.left = pos.x + 'px'; el.style.top = pos.y + 'px';
+  desktop.appendChild(el);
+  const ic = { x: pos.x, y: pos.y, w: el.offsetWidth, h: el.offsetHeight, el };
+  icons.push(ic);
+  el.addEventListener('pointerdown', e => { if (e.button) return; el.setPointerCapture(e.pointerId); el.classList.remove('settle'); drag = { ic, sx: e.clientX, sy: e.clientY, ox: ic.x, oy: ic.y }; });
+  el.addEventListener('pointermove', e => { if (!drag || drag.ic !== ic) return; el.classList.add('drag'); el.style.left = drag.ox + e.clientX - drag.sx + 'px'; el.style.top = drag.oy + e.clientY - drag.sy + 'px'; });
+  el.addEventListener('pointerup', e => {
+    if (!drag || drag.ic !== ic) return;
+    const d = drag; drag = null; el.classList.remove('drag');
+    const cx = d.ox + e.clientX - d.sx + ic.w / 2, cy = d.oy + e.clientY - d.sy + ic.h / 2;
+    let best = null, bd = Infinity;
+    for (let c = 0; c < grid.cols; c++) for (let r = 0; r < grid.rows; r++) {
+      const p = cellPos(c, r);
+      if (icons.some(o => o !== ic && Math.abs(o.x - p.x) < 2 && Math.abs(o.y - p.y) < 2)) continue;
+      const dd = Math.hypot(p.x + CELL_W / 2 - cx, p.y + CELL_H / 2 - cy);
+      if (dd < bd) { bd = dd; best = p; }
+    }
+    if (!best) best = { x: d.ox, y: d.oy };
+    el.classList.add('settle'); ic.x = best.x; ic.y = best.y; el.style.left = best.x + 'px'; el.style.top = best.y + 'px';
+    if (best.x !== d.ox || best.y !== d.oy) commit(false);
+  });
+  return ic;
+}
+function sampleLayout() {
+  grid.cols = Math.max(1, Math.floor((W - GRID_X0) / CELL_W)); grid.rows = Math.max(1, Math.floor((H - TASKBAR - GRID_Y0) / CELL_H));
+  const cells = [];
+  for (let r = 0; r < grid.rows; r++) cells.push([0, r]);
+  for (let r = 0; r < Math.min(5, grid.rows); r++) cells.push([1, r]);
+  const mc = Math.floor(grid.cols * 0.55), mr = Math.floor(grid.rows * 0.3);
+  for (const [dc, dr] of [[0, 0], [1, 0], [0, 1], [1, 1], [2, 1]]) cells.push([mc + dc, mr + dr]);
+  let i = 0;
+  for (const [c, r] of cells) if (c < grid.cols && r < grid.rows) addIcon(SAMPLE[i++ % SAMPLE.length], cellPos(c, r));
+}
+const hint = document.getElementById('hint');
+addEventListener('keydown', e => {
+  if (WALL || PREVIEW) return;
+  if (e.key === 'r' || e.key === 'R') reseed((Math.random() * 1e6) | 0);
+  else if (e.key === 'h' || e.key === 'H') hint.classList.toggle('hidden');
+});
+let resizeT = 0;
+addEventListener('resize', () => {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(() => { resize(); commit(false); }, 100);
+});
+
+/* ======================================================================
+   托管模式（和其他主题一样的消息）
+   ====================================================================== */
+function reseed(v) {
+  seed = v; bottomOK = false;
+  fish = []; syncFish();
+  if (iconsSeen) commit(true);
+}
+function applySettings(v) {
+  if (typeof v.seed === 'number' && v.seed !== seed) reseed(v.seed);
+  let plan = false;
+  for (const k in v) {
+    if (!(k in LIMITS) || typeof v[k] !== 'number' || !isFinite(v[k])) continue;
+    let x = clamp(v[k], LIMITS[k][0], LIMITS[k][1]);
+    if (INTS.has(k)) x = Math.round(x);
+    if (P[k] === x) continue;
+    P[k] = x;
+    if (k === 'pads') plan = true;
+    if (k === 'koi') syncFish();
+    if (k === 'audio') syncAudio();
+    if (k === 'albumTint') syncMedia();
+  }
+  if (plan) commit(false);
+}
+function drawGhosts() {
+  document.getElementById('ghosts').innerHTML = icons.map(ic => `<div class="ghost" style="left:${ic.x}px;top:${ic.y}px;width:${ic.w}px;height:${ic.h}px"><i></i><b></b></div>`).join('');
+}
+function startHostedMode() {
+  document.body.classList.add('wall');
+  if (PREVIEW) {
+    document.body.classList.add('preview');
+    const g = document.createElement('div'); g.id = 'ghosts'; document.body.appendChild(g);
+  }
+  icons = [];
+  commit(true);
+  let first = true;
+  const handle = m => {
+    if (m.t === 'pause') { paused = PREVIEW ? false : !!m.v; return; }
+    if (m.t === 'settings') { applySettings(m.v || {}); return; }
+    if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
+    if (m.t !== 'icons') return;
+    const k = window.devicePixelRatio || 1;
+    icons = m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : [];
+    if (PREVIEW) drawGhosts();
+    iconsSeen = true;
+    commit(first);
+    first = false;
+  };
+  if (PREVIEW) {
+    addEventListener('message', ev => { if (ev.source === parent) handle(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data); });
+    parent.postMessage(JSON.stringify({ t: 'ready' }), '*');
+    return;
+  }
+  const host = window.chrome && window.chrome.webview;
+  if (!host) return;
+  host.addEventListener('message', ev => handle(JSON.parse(ev.data)));
+  host.postMessage('ready');
+}
+
+/* ---------- 启动 ---------- */
+window.__dbg = {
+  P, AU, commit, reseed, applySettings,
+  bench() {
+    const ts = [];
+    for (let i = 0; i < 10; i++) { const a = performance.now(); draw(performance.now()); ts.push(performance.now() - a); }
+    ts.sort((a, b) => a - b);
+    return { frame: +ts[5].toFixed(2), canvas: cv.width + 'x' + cv.height, fish: fish.length, ripples: ripples.length, bubbles: bubbles.length };
+  },
+};
+resize();
+syncFish();
+if (WALL || PREVIEW) startHostedMode();
+else { sampleLayout(); commit(true); }
+syncAudio();
+syncMedia();
+requestAnimationFrame(frame);
+</script>
+<script src="share.js"></script>
+</body>
+</html>

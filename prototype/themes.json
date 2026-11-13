@@ -737,6 +737,148 @@
           ]
         }
       ]
+    },
+    {
+      "id": "pond",
+      "name": "锦鲤池",
+      "desc": "图标浮在睡莲叶上，锦鲤在叶下游；放音乐时涟漪和气泡跟着节奏",
+      "page": "pond.html",
+      "status": "ready",
+      "product": "free",
+      "thumb": "radial-gradient(circle at 70% 60%, #f4a3c0 0 2.5%, transparent 3%), radial-gradient(circle at 22% 30%, #5f9a48 0 9%, transparent 9.5%), radial-gradient(circle at 34% 30%, #5a9444 0 9%, transparent 9.5%), radial-gradient(circle at 70% 62%, #5f9a48 0 7%, transparent 7.5%), radial-gradient(ellipse 9% 3% at 55% 45%, #e2532a 0 70%, transparent 75%), radial-gradient(ellipse 8% 2.6% at 40% 74%, #f2b640 0 70%, transparent 75%), linear-gradient(150deg, #4a8476 0%, #1d4c55 100%)",
+      "groups": [
+        {
+          "name": "池塘",
+          "params": [
+            {
+              "key": "koi",
+              "label": "锦鲤",
+              "hint": "池子里游的锦鲤有几条，设为 0 可隐藏",
+              "min": 0,
+              "max": 8,
+              "step": 1,
+              "default": 5,
+              "unit": "条"
+            },
+            {
+              "key": "pads",
+              "label": "水面睡莲",
+              "hint": "空旷水面上漂着的睡莲有多少（图标下面的叶子不受影响）",
+              "min": 0,
+              "max": 1,
+              "step": 0.01,
+              "default": 0.5,
+              "format": "percent"
+            },
+            {
+              "key": "flow",
+              "label": "游动速度",
+              "hint": "锦鲤游多快、水底光纹漂多快",
+              "min": 0,
+              "max": 3,
+              "step": 0.05,
+              "default": 1,
+              "format": "times"
+            }
+          ]
+        },
+        {
+          "name": "声音",
+          "params": [
+            {
+              "key": "audio",
+              "label": "跟着声音动",
+              "hint": "低音和节拍激起涟漪、惊动锦鲤，高音让水里冒泡，音量越大光纹越亮。声音只在本机分析，不使用麦克风",
+              "options": [
+                "关闭",
+                "开启"
+              ],
+              "default": 1
+            },
+            {
+              "key": "albumTint",
+              "label": "跟着专辑封面变色",
+              "hint": "莲花和水底光纹染上正在播放曲目封面的主色",
+              "options": [
+                "关闭",
+                "开启"
+              ],
+              "default": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "nightcity",
+      "name": "夜城",
+      "desc": "图标挂在高楼外墙上；放音乐时整座城的窗户随频率亮起，霓虹踩着节拍闪",
+      "page": "nightcity.html",
+      "status": "ready",
+      "product": "free",
+      "thumb": "radial-gradient(circle at 80% 18%, #f6ecd2 0 5%, transparent 5.5%), linear-gradient(#ff3d7f, #ff3d7f) 31% 62% / 3% 20% no-repeat, linear-gradient(#3de0ff, #3de0ff) 60% 58% / 3% 14% no-repeat, linear-gradient(#ffd58a, #ffd58a) 7% 100% / 12% 30% no-repeat, linear-gradient(#a8d8ff, #a8d8ff) 46% 100% / 10% 48% no-repeat, linear-gradient(#ffd58a, #ffd58a) 72% 100% / 12% 20% no-repeat, linear-gradient(#ffc478, #ffc478) 93% 100% / 10% 36% no-repeat, linear-gradient(#22243c, #22243c) 6% 100% / 16% 86% no-repeat, linear-gradient(#262040, #262040) 27% 100% / 14% 56% no-repeat, linear-gradient(#22243c, #22243c) 46% 100% / 14% 72% no-repeat, linear-gradient(#2a2446, #2a2446) 71% 100% / 16% 50% no-repeat, linear-gradient(#22243c, #22243c) 93% 100% / 14% 62% no-repeat, linear-gradient(#070a1e 0%, #1b1640 60%, #5a2c55 100%)",
+      "groups": [
+        {
+          "name": "城市",
+          "params": [
+            {
+              "key": "rain",
+              "label": "雨",
+              "hint": "雨下多大；跟着声音时音量越大雨越密，设为 0 不下雨",
+              "min": 0,
+              "max": 1,
+              "step": 0.01,
+              "default": 0.5,
+              "format": "percent"
+            },
+            {
+              "key": "neon",
+              "label": "霓虹招牌",
+              "hint": "楼上挂几块霓虹招牌（避开图标）",
+              "min": 0,
+              "max": 8,
+              "step": 1,
+              "default": 4,
+              "unit": "块"
+            }
+          ]
+        },
+        {
+          "name": "声音",
+          "params": [
+            {
+              "key": "audio",
+              "label": "跟着声音动",
+              "hint": "每栋楼对应一段频率，窗户随音量从下往上亮起；霓虹踩着节拍轮流闪。声音只在本机分析，不使用麦克风",
+              "options": [
+                "关闭",
+                "开启"
+              ],
+              "default": 1
+            },
+            {
+              "key": "albumTint",
+              "label": "跟着专辑封面变色",
+              "hint": "霓虹和窗光染上正在播放曲目封面的主色",
+              "options": [
+                "关闭",
+                "开启"
+              ],
+              "default": 0
+            },
+            {
+              "key": "showTrack",
+              "label": "屋顶广告牌",
+              "hint": "在屋顶的广告牌上显示正在播放的曲名和艺人",
+              "options": [
+                "关闭",
+                "开启"
+              ],
+              "default": 0
+            }
+          ]
+        }
+      ]
     }
   ]
 }

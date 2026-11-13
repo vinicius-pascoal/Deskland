@@ -36,17 +36,17 @@ $WebView2Bootstrapper = [IO.Path]::GetFullPath($WebView2Bootstrapper)
 
 # A fixed source list prevents other editions or private working files entering this package.
 $sources = @('.gitattributes', '.gitignore', 'AGENTS.md', 'LICENSE', 'NOTICE', 'README.md', 'THIRD_PARTY_NOTICES.md', 'TRADEMARKS.md',
-    'host\DesktopHost.cs', 'host\Themes.cs', 'host\AudioLoopback.cs', 'host\DesklandPreview.ico', 'host\README.md', 'host\app.manifest', 'host\build.ps1', 'host\inspect.ps1',
+    'host\DesktopHost.cs', 'host\Themes.cs', 'host\AudioLoopback.cs', 'host\MediaInfo.cs','host\DesklandPreview.ico', 'host\README.md', 'host\app.manifest', 'host\build.ps1', 'host\inspect.ps1',
     'tools\build-installer.ps1', 'tools\installer.nsi', 'tools\version.json')
-$themeFiles = @('flat.html', 'meadow.html', 'space.html', 'desk.html', 'ide.html', 'terminal.html', 'gitgraph.html', 'ast.html', 'dashboard.html', 'settings.html', 'thumbs-data.js', 'share.js', 'audio.js', 'serve.mjs', 'themes.json', 'beach-palms.js', 'meadow-boy.js', 'meadow-cat.js',
+$themeFiles = @('flat.html', 'meadow.html', 'space.html', 'desk.html', 'ide.html', 'terminal.html', 'gitgraph.html', 'ast.html', 'dashboard.html', 'settings.html', 'pond.html', 'nightcity.html', 'thumbs-data.js', 'share.js', 'audio.js', 'media.js', 'serve.mjs', 'themes.json', 'beach-palms.js', 'meadow-boy.js', 'meadow-cat.js',
     'i18n\en.json', 'i18n\zh-CN.json', 'thumbs\beach.webp', 'thumbs\meadow.webp',
     'assets\beach-coconut-palm-v2.png', 'assets\beach-coconut-palm-curved.png', 'assets\beach-coconut-palm-airy.png', 'assets\beach-coconut-palm-windswept.png', 'assets\beach-coconut-palm-arch.png',
     'assets\meadow-black-kitten.png', 'assets\meadow-kite-boy-level-face.png', 'assets\meadow-kite-boy-diagonal-run.png')
 $themes = (Get-Content -LiteralPath (Join-Path $root 'prototype\themes.json') -Raw -Encoding UTF8 | ConvertFrom-Json).themes
 $ready = @($themes | Where-Object { $_.status -eq 'ready' })
 $locked = @($themes | Where-Object { $_.locked -eq $true })
-if ($themes.Count -ne 9 -or $ready.Count -ne 9 -or $locked.Count -ne 0 -or (($ready.id | Sort-Object) -join ',' -ne 'ast,beach,dashboard,desk,gitgraph,ide,meadow,space,terminal')) {
-    throw 'Expected nine usable themes and no locked preview cards'
+if ($themes.Count -ne 11 -or $ready.Count -ne 11 -or $locked.Count -ne 0 -or (($ready.id | Sort-Object) -join ',' -ne 'ast,beach,dashboard,desk,gitgraph,ide,meadow,nightcity,pond,space,terminal')) {
+    throw 'Expected eleven usable themes and no locked preview cards'
 }
 foreach ($theme in $locked) {
     if ($theme.page -or $theme.groups) { throw 'Locked themes must not contain page source or settings' }
