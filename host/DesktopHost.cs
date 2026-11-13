@@ -1168,6 +1168,7 @@ class WallpaperForm : Form
     }
 
     public void SetManualPause(bool v) { manualPause = v; PollForeground(); }
+    public bool Paused { get { return lastPause == 1; } }
 
     // ---- 一键分享：请页面画一张打好马赛克的桌面图（页面不截屏，只用图标的位置） ----
     Action<string, string, string> snapshotDone;           // (缩略图, 整张 PNG, 出错信息)
@@ -1233,7 +1234,7 @@ class WallpaperForm : Form
     }
     public void Reload()
     {
-        SystemStats.Unsubscribe(this);                     // 新页面需要的话会重新请求
+        SystemStats.Unsubscribe(this); AudioFeed.Unsubscribe(this);                     // 新页面需要的话会重新请求
         if (web.CoreWebView2 == null) return;
         try { web.CoreWebView2.Reload(); }
         catch (InvalidOperationException ex) { WebDead(ex); }
@@ -1284,7 +1285,7 @@ class WallpaperForm : Form
     {
         page = newPage;
         ThemeId = themeId;
-        SystemStats.Unsubscribe(this);
+        SystemStats.Unsubscribe(this); AudioFeed.Unsubscribe(this);
         if (web.CoreWebView2 == null) return;
         try { web.CoreWebView2.Navigate(PageUrl); }
         catch (InvalidOperationException ex) { WebDead(ex); }
@@ -1324,6 +1325,9 @@ class WallpaperForm : Form
                 if (msg != null && msg.StartsWith("record|")) { OnRecord(msg); return; }
                 // 仪表盘主题要本机的 CPU / 内存等数字：只有页面明确请求才开始采样
                 if (msg == "stats|on") { SystemStats.Subscribe(this); return; }
+                // 跟着音乐动的主题要系统正在播放的声音的频谱
+                if (msg == "audio|on") { AudioFeed.Subscribe(this); return; }
+                if (msg == "audio|off") { AudioFeed.Unsubscribe(this); return; }
                 core.PostWebMessageAsString(ScreensJson());
                 if (SettingsJson != null) core.PostWebMessageAsString(SettingsJson());
                 lastIcons = ""; lastPause = -1; PollIcons(); PollForeground();
@@ -1582,6 +1586,7 @@ class WallpaperForm : Form
         if (p == lastPause) return;
         lastPause = p;
         Post("{\"t\":\"pause\",\"v\":" + (pause ? "true" : "false") + "}");
+        AudioFeed.Refresh();
         Log.Write(screenName + (pause ? "：暂停（有窗口最大化 / 全屏，或手动暂停）" + (pauseBy == "" ? "" : "，窗口类 " + pauseBy) : "：继续播放"));
     }
 
@@ -1590,7 +1595,7 @@ class WallpaperForm : Form
     {
         if (shuttingDown) return;
         shuttingDown = true;
-        SystemStats.Unsubscribe(this);
+        SystemStats.Unsubscribe(this); AudioFeed.Unsubscribe(this);
         iconTimer.Stop(); fgTimer.Stop();
         ours.Remove(ownHandle);
         IntPtr parent = parentHwnd;
@@ -1606,7 +1611,7 @@ class WallpaperForm : Form
     {
         if (winEventHook != IntPtr.Zero) { Native.UnhookWinEvent(winEventHook); winEventHook = IntPtr.Zero; }
         iconTimer.Stop(); fgTimer.Stop();
-        SystemStats.Unsubscribe(this);
+        SystemStats.Unsubscribe(this); AudioFeed.Unsubscribe(this);
         ours.Remove(ownHandle);                          // 共用的 IconReader 由 HostContext 退出时释放
         base.OnHandleDestroyed(e);
     }
@@ -1697,6 +1702,55 @@ class IconReader : IDisposable
 
 // 本机状态采样（仪表盘主题用）：CPU（总体 + 每个核心）、内存、网络吞吐、系统盘、开机时长、进程数、电池。
 // 只在有页面请求时每秒采一次，只发给请求的壁纸窗口；只有数字，不含机器名、用户名、进程名，不写日志、不外发。
+// 声音响应：页面发来 "audio|on" 才订阅；只要有一个订阅的壁纸没暂停就采集系统声音，全部暂停 / 退订就关掉声卡回环
+static class AudioFeed
+{
+    static readonly HashSet<WallpaperForm> subs = new HashSet<WallpaperForm>();
+    static AudioLoopback capture;
+    static System.Windows.Forms.Timer timer;
+    static int sentSeq = -1;
+
+    public static void Subscribe(WallpaperForm f) { subs.Add(f); Refresh(); }
+    public static void Unsubscribe(WallpaperForm f) { if (subs.Remove(f)) Refresh(); }
+
+    // 订阅或暂停状态变了就调用
+    public static void Refresh()
+    {
+        bool want = false;
+        foreach (var f in subs) if (!f.Paused) { want = true; break; }
+        if (want && capture == null)
+        {
+            AudioLoopback.Log = msg => Log.Write(msg);
+            capture = new AudioLoopback();
+            sentSeq = -1;
+            timer = new System.Windows.Forms.Timer();
+            timer.Interval = 15;                           // 只在采集线程出了新一帧（约 33ms）时才转发
+            timer.Tick += delegate { Pump(); };
+            timer.Start();
+            Log.Write("声音响应：开始");
+        }
+        else if (!want && capture != null)
+        {
+            timer.Stop(); timer.Dispose(); timer = null;
+            capture.Dispose(); capture = null;
+            const string silent = "{\"t\":\"audio\",\"on\":false}";
+            foreach (var f in new List<WallpaperForm>(subs)) f.Post(silent);
+            Log.Write("声音响应：停止");
+        }
+    }
+
+    static void Pump()
+    {
+        if (capture == null) return;
+        int s = capture.Seq;
+        if (s == sentSeq) return;
+        sentSeq = s;
+        string json = capture.Latest;
+        if (json == null) return;
+        foreach (var f in new List<WallpaperForm>(subs)) if (!f.Paused) f.Post(json);
+    }
+}
+
 static class SystemStats
 {
     static readonly HashSet<WallpaperForm> subs = new HashSet<WallpaperForm>();

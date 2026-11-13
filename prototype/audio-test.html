@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Audio Test</title>
+<!-- 开发用：查看 audio.js 收到的频谱 / 音量 / 节拍。不在 themes.json 里，也不进安装包 -->
+<style>
+  html, body { margin: 0; height: 100%; background: #101418; color: #9fb3c8; font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; }
+  #info { position: fixed; left: 16px; top: 12px; white-space: pre; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="info"></div>
+<script src="audio.js"></script>
+<script>
+const cv = document.getElementById('c'), ctx = cv.getContext('2d'), info = document.getElementById('info');
+let flash = 0;
+function fit() {
+  const k = devicePixelRatio || 1, r = cv.getBoundingClientRect();
+  cv.width = Math.round(r.width * k); cv.height = Math.round(r.height * k);
+}
+addEventListener('resize', fit); fit();
+DesklandAudio.subscribe(a => {
+  if (a.beat) flash = 1;
+  const W = cv.width, H = cv.height, n = a.bands.length, gap = W * 0.004, bw = (W * 0.8 - gap * (n - 1)) / n;
+  ctx.fillStyle = `rgb(${16 + flash * 40},${20 + flash * 30},${24 + flash * 20})`;
+  ctx.fillRect(0, 0, W, H);
+  for (let i = 0; i < n; i++) {
+    const h = a.bands[i] * H * 0.6, x = W * 0.1 + i * (bw + gap);
+    ctx.fillStyle = `hsl(${200 - i * 5},70%,${45 + a.bands[i] * 25}%)`;
+    ctx.fillRect(x, H * 0.8 - h, bw, h);
+  }
+  [['lv', a.lv], ['bass', a.bass], ['mid', a.mid], ['high', a.high]].forEach(([k, v], j) => {
+    ctx.fillStyle = '#9fb3c8'; ctx.fillRect(W * 0.1, H * 0.84 + j * H * 0.035, W * 0.8 * v, H * 0.02);
+  });
+  info.textContent = `${a.real ? 'host' : 'demo'}  on=${a.on}  lv=${a.lv.toFixed(2)}  bass=${a.bass.toFixed(2)}  mid=${a.mid.toFixed(2)}  high=${a.high.toFixed(2)}  beatAge=${a.beatAge.toFixed(2)}s`;
+  flash *= 0.85;
+});
+</script>
+</body>
+</html>
