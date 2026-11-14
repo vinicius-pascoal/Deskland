@@ -369,10 +369,7 @@ function follow(cur, target, dt, up, down) { return cur + (target - cur) * (1 - 
 function syncAudio() {
   const want = P.audio === 1 && !!window.DesklandAudio;
   if (want && !audioOff) {
-    audioOff = DesklandAudio.subscribe(a => {
-      AU.on = a.on; AU.lv = a.on ? a.lv : 0; AU.bands.set(a.bands);
-      if (a.beat) AU.beat = true;
-    });
+    audioOff = DesklandAudio.subscribe(() => {});         // 只是打开声音；值在每一帧的 stepAudio 里读
   } else if (!want && audioOff) { audioOff(); audioOff = null; AU.on = false; AU.lv = 0; AU.bands.fill(0); AU.beat = false; }
 }
 function syncMedia() {
@@ -389,6 +386,11 @@ function onMedia(m) {
 }
 function mediaColors() { return media ? media.map(hex) : null; }
 function stepAudio(dt) {
+  if (audioOff) {
+    const a = DesklandAudio.read(performance.now());       // 已按画面的时间平滑过：每一帧都在变，不会一顿一顿
+    AU.on = a.on; AU.lv = a.lv; AU.bands.set(a.bands);
+    if (a.beat) AU.beat = true;
+  }
   const live = AU.on && P.audio === 1;
   const n = blocks.length;
   for (let i = 0; i < n; i++) {

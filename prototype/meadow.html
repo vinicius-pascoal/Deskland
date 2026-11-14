@@ -909,10 +909,7 @@ let audioOff = null;
 function syncAudio() {
   const want = P.audio === 1 && !!window.DesklandAudio;
   if (want && !audioOff) {
-    audioOff = DesklandAudio.subscribe(a => {
-      AU.lv = a.on ? a.lv : 0; AU.bass = a.on ? a.bass : 0;
-      if (a.beat) { AU.kick = 1; AU.beat = true; }
-    });
+    audioOff = DesklandAudio.subscribe(() => {});         // 只是打开声音；值在每一帧的 stepAudio 里读
   } else if (!want && audioOff) {
     audioOff(); audioOff = null;
     AU.lv = AU.bass = AU.kick = 0; AU.beat = false;
@@ -920,6 +917,11 @@ function syncAudio() {
 }
 function follow(cur, target, dt, up, down) { return cur + (target - cur) * (1 - Math.exp(-dt / (target > cur ? up : down))); }
 function stepAudio(dt) {
+  if (audioOff) {
+    const a = DesklandAudio.read(performance.now());       // 已按画面的时间平滑过：每一帧都在变，不会一顿一顿
+    AU.lv = a.lv; AU.bass = a.bass;
+    if (a.beat) { AU.kick = 1; AU.beat = true; }
+  }
   AU.kick *= Math.exp(-dt * 5);
   AU.hit = AU.beat; AU.beat = false;                          // 这一帧刚来了一拍（只持续一帧）
   AU.sway = follow(AU.sway, AU.lv, dt, 0.25, 0.9);            // 草：慢慢起风、慢慢停

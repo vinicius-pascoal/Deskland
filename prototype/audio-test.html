@@ -22,7 +22,10 @@ function fit() {
   cv.width = Math.round(r.width * k); cv.height = Math.round(r.height * k);
 }
 addEventListener('resize', fit); fit();
-DesklandAudio.subscribe(a => {
+DesklandAudio.subscribe(() => {});
+requestAnimationFrame(function loop(now) {
+  requestAnimationFrame(loop);
+  const a = DesklandAudio.read(now);
   if (a.beat) flash = 1;
   const W = cv.width, H = cv.height, n = a.bands.length, gap = W * 0.004, bw = (W * 0.8 - gap * (n - 1)) / n;
   ctx.fillStyle = `rgb(${16 + flash * 40},${20 + flash * 30},${24 + flash * 20})`;

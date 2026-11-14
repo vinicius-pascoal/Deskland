@@ -1711,8 +1711,8 @@ static class AudioFeed
 {
     static readonly HashSet<WallpaperForm> subs = new HashSet<WallpaperForm>();
     static AudioLoopback capture;
-    static System.Windows.Forms.Timer timer;
-    static int sentSeq = -1;
+    static SynchronizationContext ui;
+    static int sentSeq = -1, queued;
 
     public static void Subscribe(WallpaperForm f) { subs.Add(f); Refresh(); }
     public static void Unsubscribe(WallpaperForm f) { if (subs.Remove(f)) Refresh(); }
@@ -1725,17 +1725,16 @@ static class AudioFeed
         if (want && capture == null)
         {
             AudioLoopback.Log = msg => Log.Write(msg);
+            ui = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();   // 界面线程（WinForms）的上下文
+            sentSeq = -1; queued = 0;
             capture = new AudioLoopback();
-            sentSeq = -1;
-            timer = new System.Windows.Forms.Timer();
-            timer.Interval = 15;                           // 只在采集线程出了新一帧（约 33ms）时才转发
-            timer.Tick += delegate { Pump(); };
-            timer.Start();
+            // 采集线程每出一帧（约 16.7ms）就投递到界面线程转发；上一帧还没转发完就不再排队，界面线程忙时不会积压
+            capture.FrameReady = () => { if (ui != null && Interlocked.Exchange(ref queued, 1) == 0) ui.Post(_ => { queued = 0; Pump(); }, null); };
             Log.Write("声音响应：开始");
         }
         else if (!want && capture != null)
         {
-            timer.Stop(); timer.Dispose(); timer = null;
+            capture.FrameReady = null;
             capture.Dispose(); capture = null;
             const string silent = "{\"t\":\"audio\",\"on\":false}";
             foreach (var f in new List<WallpaperForm>(subs)) f.Post(silent);

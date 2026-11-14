@@ -36,10 +36,41 @@ class AudioLoopback : IDisposable
         if (!thread.Join(1500)) Log("音频采集线程未及时退出");
     }
 
+    // 每出一帧就在采集线程上调用（AudioFeed 用它把消息直接投递到界面线程，不再靠 15ms 的定时器去轮询）
+    public Action FrameReady;
+
     void Publish(string json)
     {
         latest = json;
         Interlocked.Increment(ref seq);
+        var cb = FrameReady;
+        if (cb != null) { try { cb(); } catch { } }
+    }
+
+    const double FrameMs = 1000.0 / 60;
+
+    // 高精度等待：Windows 10 1803+ 的高分辨率可等待计时器（不改全局时钟精度）；没有就退回 Sleep(1)
+    sealed class PreciseWait : IDisposable
+    {
+        IntPtr h;
+        public PreciseWait()
+        {
+            try { h = CreateWaitableTimerExW(IntPtr.Zero, null, 0x2 /* HIGH_RESOLUTION */, 0x1F0003); } catch { h = IntPtr.Zero; }
+        }
+        public void Wait(double ms)
+        {
+            if (h != IntPtr.Zero)
+            {
+                long due = -(long)(ms * 10000);                // 相对时间，单位 100ns
+                if (SetWaitableTimer(h, ref due, 0, IntPtr.Zero, IntPtr.Zero, false)) { WaitForSingleObject(h, 100); return; }
+            }
+            Thread.Sleep(1);
+        }
+        public void Dispose() { if (h != IntPtr.Zero) { CloseHandle(h); h = IntPtr.Zero; } }
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern IntPtr CreateWaitableTimerExW(IntPtr attrs, string name, uint flags, uint access);
+        [DllImport("kernel32.dll")] static extern bool SetWaitableTimer(IntPtr h, ref long due, int period, IntPtr completion, IntPtr arg, bool resume);
+        [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr h, uint ms);
+        [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
     }
 
     // ------------------------------------------------------------ 采集循环：出错 / 换了默认输出设备就重新打开
@@ -104,8 +135,10 @@ class AudioLoopback : IDisposable
 
             var an = new Analyzer(rate);
             var sw = Stopwatch.StartNew();
-            long nextFrame = 0, nextDevCheck = 2000;
+            double nextFrame = 0;
+            long nextDevCheck = 2000;
             float[] mono = new float[4096];
+            using (var tick = new PreciseWait())
             while (!stop)
             {
                 uint packet;
@@ -124,12 +157,14 @@ class AudioLoopback : IDisposable
                     hr = cap.GetNextPacketSize(out packet);
                     if (hr != 0) return "读取失败 (0x" + hr.ToString("X8") + ")";
                 }
-                long now = sw.ElapsedMilliseconds;
-                if (now >= nextFrame)
+                double nowMs = sw.Elapsed.TotalMilliseconds;
+                long now = (long)nowMs;
+                if (nowMs >= nextFrame)
                 {
-                    nextFrame += 33;                           // 固定节拍：Sleep 精度约 15.6ms，平均下来仍是 30 帧
-                    if (nextFrame <= now) nextFrame = now + 33;
-                    string json = an.Frame(now);
+                    // 固定 60 帧的节拍（不是"上一帧 + 间隔"）：帧间隔均匀，页面那边不会一帧新、一帧旧
+                    nextFrame += FrameMs;
+                    if (nextFrame <= nowMs) nextFrame = nowMs + FrameMs;
+                    string json = an.Frame(nowMs);
                     if (json != null) Publish(json);
                 }
                 if (now >= nextDevCheck)                       // 插上耳机 / 换了默认设备：跟着新的默认设备走
@@ -144,7 +179,8 @@ class AudioLoopback : IDisposable
                     }
                     finally { if (cur != null) Marshal.ReleaseComObject(cur); }
                 }
-                Thread.Sleep(10);
+                // 睡到下一帧，最多 5ms（声卡每 10ms 左右来一包，取得及时，环形缓冲里总是最新的声音）
+                tick.Wait(Math.Max(0.5, Math.Min(5.0, nextFrame - sw.Elapsed.TotalMilliseconds)));
             }
             client.Stop();
             return null;
@@ -190,10 +226,11 @@ class AudioLoopback : IDisposable
         int ringAt, fresh;
         readonly double[] win, re, im;
         readonly int[] bandLo, bandHi;
-        readonly double[] tilt, bands = new double[Bands], prevBass = new double[43];
+        readonly double[] tilt, bands = new double[Bands], prevBass = new double[84];   // 约 1.4 秒的低频能量（60 帧/秒）
         int prevAt, prevCount;
         double peakDb = -30, rmsPeak = -30, lastBeatAt = -1e9, level, bass, mid, high, lastBassE;
-        int beats, quietFrames;
+        double lastFrameAt = -1, lastDataAt = -1e9, quietSince = -1;
+        int beats;
         bool idle = true;
 
         public Analyzer(int rate)
@@ -222,19 +259,30 @@ class AudioLoopback : IDisposable
             fresh += count;
         }
 
-        // 33ms 一次；静音稳定后返回一次 on:false，之后返回 null（不再打扰页面）
-        public string Frame(long nowMs)
+        // 按真实经过的时间平滑：帧间隔有一点抖动时，变化量也跟着按比例，不会一下快一下慢
+        static double Follow(double cur, double target, double dt, double up, double down)
         {
-            if (fresh == 0) { Array.Clear(ring, 0, n); }   // 没有新数据：系统没在放声音
-            int recent = Math.Min(n, Math.Max(fresh, rate / 30));
+            return cur + (target - cur) * (1 - Math.Exp(-dt / (target > cur ? up : down)));
+        }
+
+        // 约 16.7ms 一次；静音稳定后返回一次 on:false，之后返回 null（不再打扰页面）
+        public string Frame(double nowMs)
+        {
+            double dt = lastFrameAt < 0 ? FrameMs / 1000 : Math.Min(0.1, Math.Max(0.001, (nowMs - lastFrameAt) / 1000));
+            lastFrameAt = nowMs;
+            // 声卡是一包一包来的（蓝牙、部分 USB 设备一包可能有几十毫秒）：这一帧没新数据很正常，接着用缓冲里的；
+            // 150ms 都没有数据才当作系统没在放声音（原来一帧没数据就清空，画面会一闪一闪地掉到零）
+            if (fresh > 0) lastDataAt = nowMs;
+            else if (nowMs - lastDataAt > 150) Array.Clear(ring, 0, n);
             fresh = 0;
+            int recent = rate / 30;                            // 音量看最近约 33ms
 
             double sq = 0;
             for (int i = 0; i < recent; i++) { double s = ring[(ringAt - 1 - i + n) % n]; sq += s * s; }
             double rmsDb = 10 * Math.Log10(sq / recent + 1e-12);
 
-            if (rmsDb < -70) quietFrames++; else quietFrames = 0;
-            if (quietFrames > 30 && level < 0.01)              // 安静了 1 秒且画面已经落回去
+            if (rmsDb >= -70) quietSince = -1; else if (quietSince < 0) quietSince = nowMs;
+            if (quietSince >= 0 && nowMs - quietSince > 1000 && level < 0.01)   // 安静了 1 秒且画面已经落回去
             {
                 if (idle) return null;
                 idle = true;
@@ -259,8 +307,8 @@ class AudioLoopback : IDisposable
                 db[b] = 10 * Math.Log10(p * norm * norm + 1e-14) + tilt[b];
                 if (db[b] > maxDb) maxDb = db[b];
             }
-            peakDb = maxDb > peakDb ? maxDb : Math.Max(-45, peakDb - 0.1);
-            rmsPeak = rmsDb > rmsPeak ? rmsDb : Math.Max(-40, rmsPeak - 0.1);
+            peakDb = maxDb > peakDb ? maxDb : Math.Max(-45, peakDb - 3 * dt);
+            rmsPeak = rmsDb > rmsPeak ? rmsDb : Math.Max(-40, rmsPeak - 3 * dt);
 
             double sb = 0, sm = 0, sh = 0; int nb = 0, nm = 0, nh = 0;
             double hz = (double)rate / n;
@@ -268,13 +316,13 @@ class AudioLoopback : IDisposable
             {
                 double v = Clamp((db[b] - (peakDb - 48)) / 48);
                 v *= v;                                        // 压低底噪，让峰更突出
-                bands[b] += (v - bands[b]) * (v > bands[b] ? 0.7 : 0.25);
+                bands[b] = Follow(bands[b], v, dt, 0.028, 0.11);
                 double fc = (bandLo[b] + bandHi[b]) * 0.5 * hz;
                 if (fc < 250) { sb += bands[b]; nb++; } else if (fc < 2000) { sm += bands[b]; nm++; } else { sh += bands[b]; nh++; }
             }
             bass = nb > 0 ? sb / nb : 0; mid = nm > 0 ? sm / nm : 0; high = nh > 0 ? sh / nh : 0;
             double lv = Clamp((rmsDb - (rmsPeak - 36)) / 36);
-            level += (lv - level) * (lv > level ? 0.6 : 0.2);
+            level = Follow(level, lv, dt, 0.03, 0.14);
 
             // 节拍：低频能量明显高于最近 1.4 秒的平均（且在上升），两拍至少隔 270ms
             double mean = 0, var = 0;
@@ -282,7 +330,7 @@ class AudioLoopback : IDisposable
             if (prevCount > 0) mean /= prevCount;
             for (int i = 0; i < prevCount; i++) var += (prevBass[i] - mean) * (prevBass[i] - mean);
             double sd = prevCount > 1 ? Math.Sqrt(var / prevCount) : 0;
-            bool beat = prevCount >= 15 && bassE > mean * 1.3 + sd * 0.5 && bassE > lastBassE && bass > 0.2 && nowMs - lastBeatAt > 270;
+            bool beat = prevCount >= 30 && bassE > mean * 1.3 + sd * 0.5 && bassE > lastBassE && bass > 0.2 && nowMs - lastBeatAt > 270;
             if (beat) { beats++; lastBeatAt = nowMs; }
             lastBassE = bassE;
             prevBass[prevAt] = bassE; prevAt = (prevAt + 1) % prevBass.Length; if (prevCount < prevBass.Length) prevCount++;

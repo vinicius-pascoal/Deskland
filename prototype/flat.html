@@ -1047,10 +1047,7 @@ let audioOff = null;
 function syncAudio() {
   const want = P.audio === 1 && !!window.DesklandAudio;
   if (want && !audioOff) {
-    audioOff = DesklandAudio.subscribe(a => {
-      AU.bass = a.on ? a.bass : 0; AU.mid = a.on ? a.mid : 0;
-      if (a.beat) AU.kick = 1;
-    });
+    audioOff = DesklandAudio.subscribe(() => {});         // 只是打开声音；值在每一帧的 stepAudio 里读
   } else if (!want && audioOff) {
     audioOff(); audioOff = null;
     AU.bass = AU.mid = AU.kick = 0;
@@ -1059,6 +1056,11 @@ function syncAudio() {
 // 上升快、回落慢，浪头不会一帧一帧地跳
 function follow(cur, target, dt, up, down) { return cur + (target - cur) * (1 - Math.exp(-dt / (target > cur ? up : down))); }
 function stepAudio(dt) {
+  if (audioOff) {
+    const a = DesklandAudio.read(performance.now());       // 已按画面的时间平滑过：每一帧都在变，不会一顿一顿
+    AU.bass = a.bass; AU.mid = a.mid;
+    if (a.beat) AU.kick = 1;
+  }
   AU.kick *= Math.exp(-dt * 3.5);
   AU.wave = follow(AU.wave, Math.min(1, Math.max(AU.bass * 1.2, AU.kick * 0.9)), dt, 0.12, 0.6);
   AU.foam = follow(AU.foam, Math.min(1, AU.mid * 1.6), dt, 0.1, 0.45);

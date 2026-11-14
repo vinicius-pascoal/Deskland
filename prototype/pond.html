@@ -495,10 +495,7 @@ function follow(cur, target, dt, up, down) { return cur + (target - cur) * (1 - 
 function syncAudio() {
   const want = P.audio === 1 && !!window.DesklandAudio;
   if (want && !audioOff) {
-    audioOff = DesklandAudio.subscribe(a => {
-      AU.lv = a.on ? a.lv : 0; AU.bass = a.on ? a.bass : 0; AU.high = a.on ? a.high : 0;
-      if (a.beat) AU.beat = true;
-    });
+    audioOff = DesklandAudio.subscribe(() => {});         // 只是打开声音；值在每一帧的 stepAudio 里读
   } else if (!want && audioOff) { audioOff(); audioOff = null; AU.lv = AU.bass = AU.high = 0; AU.beat = false; }
 }
 function syncMedia() {
@@ -509,6 +506,11 @@ function syncMedia() {
 const colorKey = () => media ? media.join() : '';
 function mediaColors() { return media ? media.map(hex) : null; }
 function stepAudio(dt) {
+  if (audioOff) {
+    const a = DesklandAudio.read(performance.now());       // 已按画面的时间平滑过：每一帧都在变，不会一顿一顿
+    AU.lv = a.lv; AU.bass = a.bass; AU.high = a.high;
+    if (a.beat) AU.beat = true;
+  }
   if (AU.beat) {
     AU.beat = false; AU.kick = 1;
     // 节拍：锦鲤受惊窜一下，水面一两处涟漪（低音越重涟漪越大）
