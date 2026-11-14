@@ -6,7 +6,7 @@
 <title>Deskland · 锦鲤池（原型）</title>
 <!--
   Deskland · 锦鲤池（俯看池塘；Canvas 2D）
-  - 每个图标落在一片睡莲叶上；空旷的水面零星漂着几丛睡莲和莲花
+  - 每个图标落在一片睡莲叶上；挨在一起的一组图标合用一片大王莲（边缘翘起）；空旷的水面零星漂着几丛睡莲和莲花
   - 锦鲤在水下游，从叶子底下穿过；水底有晃动的光纹（焦散）
   - 跟着声音（默认开启）：低音和节拍在水面激起涟漪、锦鲤受惊加速，高音让水里冒泡，音量越大光纹越亮
   - 跟着专辑封面变色（默认关闭）：莲花和光纹染上正在播放的曲目封面的主色
@@ -222,19 +222,64 @@ function rectGap(ic, x, y) {
   const dx = Math.max(ic.x - x, 0, x - ic.x - ic.w), dy = Math.max(ic.y - y, 0, y - ic.y - ic.h);
   return Math.hypot(dx, dy);
 }
+// 挨在一起的图标合用一片王莲（大叶子、边缘翘起）；一片最多盖住离叶心 GIANT_REACH 以内的图标中心，
+// 一长列图标会分成几片
+const GIANT_REACH = 112, GIANT_MARGIN = 44;
+function iconsNear(a, b) {
+  const gx = Math.max(a.x - b.x - b.w, b.x - a.x - a.w, 0), gy = Math.max(a.y - b.y - b.h, b.y - a.y - a.h, 0);
+  return gx < 36 && gy < 36;
+}
+function encloseOf(pts) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const p of pts) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
+  const x = (x0 + x1) / 2, y = (y0 + y1) / 2;
+  let r = 0; for (const p of pts) r = Math.max(r, Math.hypot(p.x - x, p.y - y));
+  return { x, y, r };
+}
+function groupIcons(pts) {
+  const n = pts.length, used = new Array(n).fill(false), groups = [];
+  const order = pts.map((_, i) => i).sort((a, b) => (Math.round(pts[a].x / 20) - Math.round(pts[b].x / 20)) || (pts[a].y - pts[b].y));
+  for (const s of order) {
+    if (used[s]) continue;
+    used[s] = true;
+    const g = [s], tried = new Set();
+    for (;;) {
+      const e = encloseOf(g.map(i => pts[i]));
+      let best = -1, bd = Infinity;
+      for (let i = 0; i < n; i++) {
+        if (used[i] || tried.has(i) || !g.some(j => iconsNear(pts[i].ic, pts[j].ic))) continue;
+        const d = Math.hypot(pts[i].x - e.x, pts[i].y - e.y);
+        if (d < bd) { bd = d; best = i; }
+      }
+      if (best < 0) break;
+      if (encloseOf(g.concat(best).map(i => pts[i])).r <= GIANT_REACH) { g.push(best); used[best] = true; }
+      else tried.add(best);
+    }
+    groups.push(g.map(i => pts[i]));
+  }
+  return groups;
+}
 function planPads() {
   const list = [];
-  for (const ic of icons) {
-    const cx = ic.x + ic.w / 2, cy = ic.y + Math.min(ic.h, 96) * 0.4;
-    const h = hash2(Math.round(cx), Math.round(cy), 5);
-    list.push({ x: cx, y: cy, r: 35 + h * 6, rot: h * 6.283, notch: 0.42 + h * 0.2, tone: hash2(Math.round(cx), Math.round(cy), 6), icon: true });
+  const pts = icons.map(ic => ({ x: ic.x + ic.w / 2, y: ic.y + Math.min(ic.h, 96) * 0.4, ic }));
+  for (const g of groupIcons(pts)) {
+    const e = g.length > 1 ? encloseOf(g) : g[0];
+    const h = hash2(Math.round(e.x), Math.round(e.y), 5), tone = hash2(Math.round(e.x), Math.round(e.y), 6);
+    if (g.length > 1) {
+      const R = e.r + GIANT_MARGIN + h * 4;
+      list.push({ x: e.x, y: e.y, r: R, rot: h * 6.283, tone, icon: true, giant: true, rim: clamp(R * 0.075, 7, 12) });
+    } else list.push({ x: e.x, y: e.y, r: 35 + h * 6, rot: h * 6.283, notch: 0.42 + h * 0.2, tone, icon: true });
   }
+  // 大叶子先画、小的后画；大叶子互相压住时边缘自然叠在一起
+  list.sort((a, b) => b.r - a.r);
+  const giants = list.filter(p => p.giant);
   const DH = H - TASKBAR, r = mulberry32(seed * 3 + 11);
   const target = Math.round(W * DH / 1e6 * 10 * P.pads);
   let clusters = 0, tries = 0;
   while (clusters < target && tries++ < 400) {
     const x = 40 + r() * (W - 80), y = 40 + r() * (DH - 80);
     if (icons.some(ic => rectGap(ic, x, y) < 95)) continue;
+    if (giants.some(p => Math.hypot(p.x - x, p.y - y) < p.r + 50)) continue;
     if (list.some(p => !p.icon && Math.hypot(p.x - x, p.y - y) < 160)) continue;
     clusters++;
     const n = 1 + (r() * 4 | 0);
@@ -242,12 +287,14 @@ function planPads() {
       const pr = 14 + r() * 20, a = r() * 6.283, d = i ? 18 + r() * 26 : 0;
       const px = x + Math.cos(a) * d, py = y + Math.sin(a) * d;
       if (icons.some(ic => rectGap(ic, px, py) < pr + 30)) continue;
+      if (giants.some(p => Math.hypot(p.x - px, p.y - py) < p.r + pr + 10)) continue;
       list.push({ x: px, y: py, r: pr, rot: r() * 6.283, notch: 0.4 + r() * 0.25, tone: r(), flower: i === 0 && r() < 0.55 });
     }
   }
   pads = list;
 }
 function padPath(c, p) {
+  if (p.giant) { c.beginPath(); c.arc(p.x, p.y, p.r, 0, 6.283); return; }
   const n0 = p.rot, n1 = p.rot + p.notch;           // 叶子上的缺口（楔形）
   c.beginPath(); c.moveTo(p.x, p.y);
   c.arc(p.x, p.y, p.r, n1, n0 + 6.283);
@@ -267,6 +314,7 @@ function renderSurface(dst) {
   for (const p of pads) { c.save(); c.translate(9, 13); padPath(c, p); c.fill(); c.restore(); }
   const fc = flowerColor();
   for (const p of pads) {
+    if (p.giant) { drawGiantPad(c, p); continue; }
     const g = c.createRadialGradient(p.x - p.r * 0.3, p.y - p.r * 0.35, p.r * 0.1, p.x, p.y, p.r);
     const base = mixc([74, 128, 52], [52, 104, 46], p.tone);
     g.addColorStop(0, rgb(mixc(base, [168, 198, 112], 0.45))); g.addColorStop(0.75, rgb(base)); g.addColorStop(1, rgb(mixc(base, [30, 62, 34], 0.5)));
@@ -282,6 +330,60 @@ function renderSurface(dst) {
   }
   for (const p of pads) if (p.flower) drawLotus(c, p.x + p.r * 0.15, p.y - p.r * 0.1, Math.max(9, p.r * 0.55), fc, p.rot);
   c.setTransform(1, 0, 0, 1, 0, 0);
+}
+// 王莲：圆形大叶，叶面有放射状叶脉和一圈圈横脉（像绗缝的格子），边缘翘起一圈，外侧露出一点红褐色的叶背
+function drawGiantPad(c, p) {
+  const { x, y, r: R, rim, rot } = p, ri = R - rim;
+  const base = mixc([70, 126, 50], [54, 108, 44], p.tone);
+  // 叶面
+  const g = c.createRadialGradient(x - R * 0.3, y - R * 0.35, R * 0.05, x, y, ri);
+  g.addColorStop(0, rgb(mixc(base, [170, 200, 110], 0.4))); g.addColorStop(0.8, rgb(base)); g.addColorStop(1, rgb(mixc(base, [30, 62, 34], 0.35)));
+  c.fillStyle = g; c.beginPath(); c.arc(x, y, ri, 0, 6.283); c.fill();
+  // 叶脉：放射脉 + 向内弯的横脉；暗线压出凹槽，旁边一道亮线
+  const N = clamp(Math.round(R / 7), 16, 40), rings = [0.28, 0.5, 0.7, 0.88];
+  const veins = (dx, dy) => {
+    c.beginPath();
+    for (let i = 0; i < N; i++) {
+      const a = rot + i * 6.283 / N;
+      c.moveTo(x + dx + Math.cos(a) * ri * 0.06, y + dy + Math.sin(a) * ri * 0.06);
+      c.lineTo(x + dx + Math.cos(a) * ri * 0.97, y + dy + Math.sin(a) * ri * 0.97);
+    }
+    for (const k of rings) {
+      for (let i = 0; i < N; i++) {
+        const a0 = rot + i * 6.283 / N, a1 = a0 + 6.283 / N, am = (a0 + a1) / 2, rr = ri * k;
+        c.moveTo(x + dx + Math.cos(a0) * rr, y + dy + Math.sin(a0) * rr);
+        c.quadraticCurveTo(x + dx + Math.cos(am) * rr * 0.93, y + dy + Math.sin(am) * rr * 0.93, x + dx + Math.cos(a1) * rr, y + dy + Math.sin(a1) * rr);
+      }
+    }
+  };
+  c.lineWidth = 0.9;
+  c.strokeStyle = 'rgba(200,228,150,0.2)'; veins(0.8, 0.8); c.stroke();
+  c.strokeStyle = 'rgba(26,60,28,0.38)'; veins(0, 0); c.stroke();
+  c.fillStyle = 'rgba(26,60,28,0.45)'; c.beginPath(); c.arc(x, y, 2.2, 0, 6.283); c.fill();
+  // 翘起的边：光从左上来，右下那侧的内壁朝着光，亮；左上那侧背光，暗
+  const lg = c.createLinearGradient(x - R * 0.7, y - R * 0.7, x + R * 0.7, y + R * 0.7);
+  lg.addColorStop(0, rgb(mixc(base, [24, 50, 26], 0.45))); lg.addColorStop(0.5, rgb(mixc(base, [150, 186, 96], 0.2))); lg.addColorStop(1, rgb(mixc(base, [196, 222, 140], 0.55)));
+  const TAU = Math.PI * 2;                          // 反向的整圆必须用精确的 2π，6.283 会变成一小段弧
+  c.fillStyle = lg; c.beginPath(); c.arc(x, y, R, 0, TAU); c.moveTo(x + ri, y); c.arc(x, y, ri, TAU, 0, true); c.fill();
+  // 边上的褶：一圈短线
+  c.strokeStyle = 'rgba(30,64,30,0.22)'; c.lineWidth = 0.8; c.beginPath();
+  for (let a = rot, da = 7 / R; a < rot + 6.283; a += da) { c.moveTo(x + Math.cos(a) * (ri + 1), y + Math.sin(a) * (ri + 1)); c.lineTo(x + Math.cos(a) * (R - 1.5), y + Math.sin(a) * (R - 1.5)); }
+  c.stroke();
+  // 内侧折痕、外沿的红褐色叶背
+  c.strokeStyle = 'rgba(22,52,24,0.55)'; c.lineWidth = 1.2; c.beginPath(); c.arc(x, y, ri, 0, 6.283); c.stroke();
+  c.strokeStyle = 'rgba(150,62,52,0.85)'; c.lineWidth = 1.8; c.beginPath(); c.arc(x, y, R - 0.6, 0, 6.283); c.stroke();
+  // 边上一道排水的小缺口
+  const ca = rot + 2.4, cw = 5 / R;
+  c.fillStyle = rgb(mixc(base, [20, 44, 24], 0.5));
+  c.beginPath(); c.moveTo(x + Math.cos(ca) * (ri - 1), y + Math.sin(ca) * (ri - 1));
+  c.lineTo(x + Math.cos(ca - cw) * (R + 0.5), y + Math.sin(ca - cw) * (R + 0.5)); c.lineTo(x + Math.cos(ca + cw) * (R + 0.5), y + Math.sin(ca + cw) * (R + 0.5));
+  c.closePath(); c.fill();
+  // 几颗水珠
+  c.fillStyle = 'rgba(255,255,255,0.5)';
+  for (let i = 0; i < 3; i++) {
+    const a = rot * (i + 1.7) + i * 2.1, d = ri * (0.3 + 0.18 * i);
+    c.beginPath(); c.arc(x + Math.cos(a) * d, y + Math.sin(a) * d, 1.3 + (i === 0) * 0.5, 0, 6.283); c.fill();
+  }
 }
 function drawLotus(c, x, y, R, col, rot) {
   const dark = mixc(col, [120, 40, 80], 0.35), light = mixc(col, [255, 255, 255], 0.45);
