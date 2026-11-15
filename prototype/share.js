@@ -4,6 +4,65 @@
 // 所以图里不会露出任何文件名；设置窗口、别的窗口挡着桌面也没关系。
 // 用到主题页面里的：cv（画布）、draw()、icons、W、H、WALL；部分主题另有 renderLabels()、cacheOK
 // （2D 画布画的字、陆地上的画，画布大小变了要按新的大小重画）
+// 非最大化窗口效果：宿主把窗口的物理像素矩形发来，这里只在窗口外侧放一层
+// 不接收鼠标的边框光晕。壁纸位于窗口下方，因此不会遮挡窗口、抢焦点或影响拖动。
+(function () {
+    const qs = new URLSearchParams(location.search);
+    const wall = qs.has('wallpaper'), preview = qs.has('preview');
+    if (!wall && !preview) return;
+    const style = document.createElement('style');
+    style.textContent = `
+      #deskland-window-effects { position: fixed; inset: 0; pointer-events: none; z-index: 1; overflow: visible; }
+      #deskland-window-effects > i {
+        position: absolute; display: block; box-sizing: border-box; pointer-events: none;
+        border: 1px solid rgba(177, 226, 255, .42); border-radius: 7px;
+        box-shadow: 0 0 7px 1px rgba(90, 190, 255, .42), 0 0 18px 2px rgba(76, 128, 255, .22);
+        animation: deskland-window-edge-pulse 2.8s ease-in-out infinite;
+      }
+      @keyframes deskland-window-edge-pulse { 0%, 100% { opacity: .62; } 50% { opacity: 1; } }
+      @media (prefers-reduced-motion: reduce) { #deskland-window-effects > i { animation: none; } }
+    `;
+    document.head.appendChild(style);
+    const layer = document.createElement('div');
+    layer.id = 'deskland-window-effects';
+    document.body.appendChild(layer);
+    const ghosts = document.getElementById('ghosts');
+    if (ghosts) ghosts.style.zIndex = '2';
+
+    let last = null;
+    function render(m) {
+      last = m;
+      layer.innerHTML = '';
+      const k = Math.max(1, window.devicePixelRatio || 1);
+      const rects = Array.isArray(m && m.r) ? m.r : [];
+      for (let i = 0; i < Math.min(rects.length, 48); i++) {
+        const r = rects[i];
+        if (!Array.isArray(r) || r.length < 4) continue;
+        const x = Number(r[0]) / k, y = Number(r[1]) / k;
+        const w = Number(r[2] - r[0]) / k, h = Number(r[3] - r[1]) / k;
+        if (![x, y, w, h].every(Number.isFinite) || w < 8 || h < 8) continue;
+        const edge = document.createElement('i');
+        edge.style.left = (x - 2) + 'px'; edge.style.top = (y - 2) + 'px';
+        edge.style.width = (w + 4) + 'px'; edge.style.height = (h + 4) + 'px';
+        edge.style.animationDelay = (-i * 0.11).toFixed(2) + 's';
+        layer.appendChild(edge);
+      }
+    }
+    function receive(data) {
+      let m; try { m = typeof data === 'string' ? JSON.parse(data) : data; } catch (e) { return; }
+      if (m && m.t === 'windows') render(m);
+    }
+    if (wall && window.chrome && window.chrome.webview) {
+      window.chrome.webview.addEventListener('message', ev => receive(ev.data));
+      window.chrome.webview.postMessage('windows|ready');
+    }
+    if (preview) {
+      addEventListener('message', ev => { if (ev.source === parent) receive(ev.data); });
+      parent.postMessage(JSON.stringify({ t: 'windowEffectsReady' }), '*');
+    }
+    addEventListener('resize', () => { if (last) render(last); });
+})();
+
 (function () {
   // 固定的随机数：同一个位置的图标每次编出来的样子一样
   function rnd(x, y, k) {

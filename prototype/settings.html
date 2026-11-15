@@ -411,7 +411,7 @@ const send = m => { if (host) host.postMessage(JSON.stringify(m)); };
 
 // theme：右边正在看 / 调的主题（选中显示器的主题）；defaultTheme：所有显示器的默认主题；monitors：宿主给的显示器清单；sel：选中的显示器（'all' 或设备名）
 const state = { registry0: null, registry: null, theme: 'beach', defaultTheme: 'beach', monitors: [], sel: 'all', screen0: null,
-  params: {}, screen: null, icons: null,
+  params: {}, screen: null, icons: null, windows: null,
   langSetting: 'auto', langSys: 'zh-CN', autostartWarn: false, autostartSw: '',
   updateVersion: '', updateStatus: '', updateProgress: -1, updateError: '' };
 const $ = id => document.getElementById(id);
@@ -759,6 +759,9 @@ addEventListener('message', e => {
   if (m.t === 'ready') {                 // 预览页面加载好了：先给设置，再给图标
     toPreview({ t: 'settings', v: valuesOf(themeById(state.theme)) });
     if (state.icons) toPreview(state.icons);
+    if (state.windows) toPreview(state.windows);
+  } else if (m.t === 'windowEffectsReady') {
+    if (state.windows) toPreview(state.windows);
   }
 });
 function updateFoot() {
@@ -905,6 +908,9 @@ function onHost(m) {
     state.icons = m;
     toPreview(m);
     updateFoot();
+  } else if (m.t === 'windows') {
+    state.windows = m;
+    toPreview(m);
   } else if (m.t === 'autostart') {
     $('autostart').checked = !!m.v;
   } else if (m.t === 'recProgress') {

@@ -531,6 +531,7 @@ class HostContext : ApplicationContext
                     "lang", Settings.Lang, "langEff", I18n.Code, "langSys", I18n.Sys)));
                 if (updateVersion != null) PostUpdateState();
                 if (Selected != null && Selected.LastIcons != "") settingsWin.Post(Selected.LastIcons);
+                if (Selected != null && Selected.LastWindows != "") settingsWin.Post(Selected.LastWindows);
                 break;
             case "monitor":                                 // 设置页换了显示器：预览改用那块屏幕的图标
             {
@@ -538,6 +539,7 @@ class HostContext : ApplicationContext
                 if (key == null) return;
                 selectedMonitor = key;
                 if (Selected != null && Selected.LastIcons != "") settingsWin.Post(Selected.LastIcons);
+                if (Selected != null && Selected.LastWindows != "") settingsWin.Post(Selected.LastWindows);
                 break;
             }
             case "set":
@@ -853,6 +855,7 @@ class HostContext : ApplicationContext
             f.ScreensFor = ScreensFor;
             // 设置页的预览和分享进度只跟选中的那块屏幕
             f.IconsChanged += delegate(string json) { if (settingsWin != null && f == Selected) settingsWin.Post(json); };
+            f.WindowsChanged += delegate(string json) { if (settingsWin != null && f == Selected) settingsWin.Post(json); };
             f.RecordProgress += delegate(string p) { if (settingsWin != null && f == Selected) settingsWin.Post("{\"t\":\"recProgress\",\"p\":" + p + "}"); };
             f.HandleDestroyed += OnFormGone;
             forms.Add(f);
@@ -1120,6 +1123,7 @@ class WallpaperForm : Form
     static readonly HashSet<IntPtr> ours = new HashSet<IntPtr>();
     IntPtr ownHandle;
     string lastIcons = "";
+    string lastWindows = null;
     int lastPause = -1;
     bool manualPause, shuttingDown;
 
@@ -1128,7 +1132,9 @@ class WallpaperForm : Form
     string page;                                        // 当前主题的页面（themes.json 里的 page）
     public Func<string> SettingsJson;                   // 页面就绪时先发给它的设置消息
     public event Action<string> IconsChanged;           // 图标变化时转给设置窗口的预览
+    public event Action<string> WindowsChanged;          // 非最大化窗口边界变化时转给设置窗口的预览
     public string LastIcons { get { return lastIcons; } }
+    public string LastWindows { get { return lastWindows ?? ""; } }
     public bool IsPrimary { get { return primary; } }
     public readonly string MonitorKey;                  // 显示器设备名（如 \\.\DISPLAY1），按它记每块屏幕的主题
     public string ThemeId { get; private set; }         // 这块屏幕现在的主题
@@ -1331,9 +1337,10 @@ class WallpaperForm : Form
                 // 正在播放的曲名、封面主色（Windows 媒体控件）
                 if (msg == "media|on") { MediaFeed.Subscribe(this); return; }
                 if (msg == "media|off") { MediaFeed.Unsubscribe(this); return; }
+                if (msg == "windows|ready") { if (lastWindows != null) Post(lastWindows); return; }
                 core.PostWebMessageAsString(ScreensJson());
                 if (SettingsJson != null) core.PostWebMessageAsString(SettingsJson());
-                lastIcons = ""; lastPause = -1; PollIcons(); PollForeground();
+                lastIcons = ""; lastWindows = null; lastPause = -1; PollIcons(); PollForeground();
             };
             core.Navigate(PageUrl);
             iconTimer.Start();
@@ -1570,14 +1577,45 @@ class WallpaperForm : Form
         return list;
     }
 
+    // 壁纸在所有普通窗口下面，所以只把非最大化窗口的矩形发给页面；页面在窗口外侧画光晕。
+    // 坐标使用物理像素，并转换成当前显示器左上角的局部坐标，和 icons 消息保持一致。
+    string WindowEffectsJson(List<Blocker> list)
+    {
+        var sb = new StringBuilder("{\"t\":\"windows\",\"r\":[");
+        int n = 0;
+        foreach (Blocker b in list)
+        {
+            if (b.Zoomed) continue;
+            Native.RECT wr = b.R;
+            bool covers = wr.Left <= screen.Left && wr.Top <= screen.Top && wr.Right >= screen.Right && wr.Bottom >= screen.Bottom;
+            if (covers) continue;                              // 无边框全屏窗口也不应被当成普通窗口
+            Rectangle clipped = Rectangle.Intersect(screen, Rectangle.FromLTRB(wr.Left, wr.Top, wr.Right, wr.Bottom));
+            if (clipped.Width < 8 || clipped.Height < 8) continue;
+            if (n++ > 0) sb.Append(',');
+            sb.Append('[').Append(clipped.Left - screen.Left).Append(',').Append(clipped.Top - screen.Top).Append(',')
+              .Append(clipped.Right - screen.Left).Append(',').Append(clipped.Bottom - screen.Top).Append(']');
+        }
+        return sb.Append("]}").ToString();
+    }
+
+    void PollWindowEffects(List<Blocker> list)
+    {
+        string json = WindowEffectsJson(list);
+        if (json == lastWindows) return;
+        lastWindows = json;
+        if (WindowsChanged != null) WindowsChanged(json);
+        Post(json);
+    }
+
     void PollForeground()
     {
         if (web.CoreWebView2 == null) return;
         bool pause = manualPause;
         string pauseBy = "";
+        List<Blocker> list = Blockers();
         if (!pause)
         {
-            foreach (Blocker b in Blockers())
+            foreach (Blocker b in list)
             {
                 Native.RECT wr = b.R;
                 bool covers = wr.Left <= screen.Left && wr.Top <= screen.Top && wr.Right >= screen.Right && wr.Bottom >= screen.Bottom;
@@ -1585,6 +1623,7 @@ class WallpaperForm : Form
                 if (screen.Contains(cx, cy) && (covers || b.Zoomed)) { pause = true; pauseBy = b.Cls; break; }
             }
         }
+        PollWindowEffects(list);
         int p = pause ? 1 : 0;
         if (p == lastPause) return;
         lastPause = p;
