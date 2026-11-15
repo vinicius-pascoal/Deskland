@@ -35,7 +35,7 @@
       border: 1px solid var(--fx-border); border-radius: var(--fx-radius);
       box-shadow: 0 0 7px 1px var(--fx-glow), 0 0 18px 2px var(--fx-halo);
       animation-duration: 2.8s; animation-timing-function: ease-in-out; animation-iteration-count: infinite;
-      will-change: opacity, transform;
+      will-change: opacity;
     }
     #deskland-window-effects > i::before,
     #deskland-window-effects > i::after { content: ''; position: absolute; pointer-events: none; }
@@ -134,13 +134,13 @@
     .fx-nightcity::before { inset: -8px; background: repeating-linear-gradient(112deg, transparent 0 16px, rgba(61,224,255,.2) 17px 18px, transparent 19px 32px); opacity: .45; animation: deskland-window-fx-rain 2.4s linear infinite; }
     .fx-nightcity::after { left: 8%; right: 8%; bottom: -5px; height: 3px; background: linear-gradient(90deg, #ff3d7f, #ffd58a, #3de0ff); filter: blur(1px); animation: deskland-window-fx-neon 2.1s ease-in-out infinite; }
 
-    @keyframes deskland-window-fx-beach { 0%,100% { opacity: .55; } 50% { opacity: .9; transform: translateY(-1px); } }
+    @keyframes deskland-window-fx-beach { 0%,100% { opacity: .55; } 50% { opacity: .9; } }
     @keyframes deskland-window-fx-foam { 0%,100% { transform: scaleX(.86); opacity: .55; } 50% { transform: scaleX(1); opacity: .9; } }
     @keyframes deskland-window-fx-shimmer { from { transform: translateX(-20%); } to { transform: translateX(480%); } }
-    @keyframes deskland-window-fx-meadow { 0%,100% { opacity: .5; } 50% { opacity: .82; transform: translateY(1px); } }
+    @keyframes deskland-window-fx-meadow { 0%,100% { opacity: .5; } 50% { opacity: .82; } }
     @keyframes deskland-window-fx-shadow { 0%,100% { transform: scaleX(.86); opacity: .55; } 50% { transform: scaleX(1.05); opacity: .8; } }
     @keyframes deskland-window-fx-pollen { 0%,100% { opacity: .2; transform: scale(.98); } 50% { opacity: .52; transform: scale(1.02); } }
-    @keyframes deskland-window-fx-space { 0%,100% { opacity: .48; } 50% { opacity: .86; transform: scale(1.005); } }
+    @keyframes deskland-window-fx-space { 0%,100% { opacity: .48; } 50% { opacity: .86; } }
     @keyframes deskland-window-fx-stars { 0%,100% { transform: translate(0,0); opacity: .35; } 50% { transform: translate(4px,-2px); opacity: .7; } }
     @keyframes deskland-window-fx-orbit { to { transform: scaleX(1.04) rotate(360deg); } }
     @keyframes deskland-window-fx-desk { 0%,100% { opacity: .48; } 50% { opacity: .78; } }
@@ -216,8 +216,8 @@
       if (![x, y, w, h].every(Number.isFinite) || w < 8 || h < 8) continue;
       const edge = document.createElement('i');
       edge.className = 'fx-' + activeProfile.name;
-      edge.style.left = (x - 2) + 'px'; edge.style.top = (y - 2) + 'px';
-      edge.style.width = (w + 4) + 'px'; edge.style.height = (h + 4) + 'px';
+      edge.style.left = x + 'px'; edge.style.top = y + 'px';
+      edge.style.width = w + 'px'; edge.style.height = h + 'px';
       edge.style.animationDelay = (-i * 0.11).toFixed(2) + 's';
       layer.appendChild(edge);
     }
