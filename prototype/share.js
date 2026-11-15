@@ -35,19 +35,133 @@
       border: 1px solid var(--fx-border); border-radius: var(--fx-radius);
       box-shadow: 0 0 7px 1px var(--fx-glow), 0 0 18px 2px var(--fx-halo);
       animation-duration: 2.8s; animation-timing-function: ease-in-out; animation-iteration-count: infinite;
+      will-change: opacity, transform;
     }
-    #deskland-window-effects > i.fx-water { animation-name: deskland-window-fx-water; }
+    #deskland-window-effects > i::before,
+    #deskland-window-effects > i::after { content: ''; position: absolute; pointer-events: none; }
+
+    /* Praia: espuma baixa sob a janela e um reflexo que corre na horizontal. */
+    #deskland-window-effects > i.fx-beach { animation-name: deskland-window-fx-beach; }
+    .fx-beach::before {
+      left: 6%; right: 6%; bottom: -7px; height: 6px; border-radius: 50%; filter: blur(1px);
+      background: radial-gradient(ellipse at 15% 50%, rgba(224,255,249,.75) 0 8%, transparent 20%),
+                  radial-gradient(ellipse at 45% 55%, rgba(185,250,244,.62) 0 9%, transparent 22%),
+                  radial-gradient(ellipse at 78% 45%, rgba(224,255,249,.7) 0 7%, transparent 19%);
+      animation: deskland-window-fx-foam 3.4s ease-in-out infinite;
+    }
+    .fx-beach::after {
+      left: -14%; top: -3px; width: 28%; height: 3px; border-radius: 50%;
+      background: linear-gradient(90deg, transparent, rgba(210,255,250,.9), transparent);
+      filter: blur(.5px); animation: deskland-window-fx-shimmer 2.7s linear infinite;
+    }
+
+    /* Prado: halo difuso, pequena sombra no chão e movimento orgânico. */
     #deskland-window-effects > i.fx-meadow { animation-name: deskland-window-fx-meadow; }
+    .fx-meadow { box-shadow: 0 5px 16px 2px rgba(54,126,56,.28), 0 0 18px 2px var(--fx-halo); }
+    .fx-meadow::before {
+      left: 5%; right: 5%; bottom: -10px; height: 12px; border-radius: 50%; filter: blur(4px);
+      background: radial-gradient(ellipse, rgba(54,126,56,.38), transparent 70%);
+      animation: deskland-window-fx-shadow 3.8s ease-in-out infinite;
+    }
+    .fx-meadow::after {
+      inset: -7px; border: 1px dotted rgba(223,246,155,.25); border-radius: var(--fx-radius);
+      animation: deskland-window-fx-pollen 5s ease-in-out infinite;
+    }
+
+    /* Espaço: nebulosa suave e partículas estelares lentas. */
     #deskland-window-effects > i.fx-space { animation-name: deskland-window-fx-space; }
-    #deskland-window-effects > i.fx-warm { animation-name: deskland-window-fx-warm; }
-    #deskland-window-effects > i.fx-neon { animation-name: deskland-window-fx-neon; }
-    #deskland-window-effects > i.fx-phosphor { animation-name: deskland-window-fx-phosphor; }
-    @keyframes deskland-window-fx-water { 0%,100% { opacity: .55; } 50% { opacity: 1; box-shadow: 0 0 10px 1px var(--fx-glow), 0 0 22px 3px var(--fx-halo); } }
-    @keyframes deskland-window-fx-meadow { 0%,100% { opacity: .52; } 50% { opacity: .88; transform: translateY(1px); } }
-    @keyframes deskland-window-fx-space { 0%,100% { opacity: .48; } 50% { opacity: 1; box-shadow: 0 0 9px 2px var(--fx-glow), 0 0 25px 3px var(--fx-halo); } }
-    @keyframes deskland-window-fx-warm { 0%,100% { opacity: .48; } 50% { opacity: .82; } }
-    @keyframes deskland-window-fx-neon { 0%,100% { opacity: .42; } 45% { opacity: 1; } 52% { opacity: .62; } 60% { opacity: .92; } }
-    @keyframes deskland-window-fx-phosphor { 0%,100% { opacity: .48; } 50% { opacity: .95; } }
+    .fx-space::before {
+      inset: -15px; border-radius: 50%; filter: blur(5px); opacity: .48;
+      background: radial-gradient(circle at 18% 30%, rgba(241,224,255,.8) 0 2%, transparent 7%),
+                  radial-gradient(circle at 72% 68%, rgba(147,197,253,.7) 0 1.5%, transparent 6%),
+                  radial-gradient(ellipse at 45% 45%, rgba(139,92,246,.24), transparent 68%);
+      animation: deskland-window-fx-stars 6s ease-in-out infinite;
+    }
+    .fx-space::after {
+      inset: -6px; border: 1px solid rgba(207,190,255,.2); border-radius: 50%;
+      transform: scaleX(1.04); animation: deskland-window-fx-orbit 5s linear infinite;
+    }
+
+    /* Escrivaninha: sombra quente abaixo e faixa de luz de uma lâmpada. */
+    #deskland-window-effects > i.fx-desk { animation-name: deskland-window-fx-desk; }
+    .fx-desk { box-shadow: 0 8px 18px 3px rgba(131,73,30,.26), 0 0 12px 1px var(--fx-glow); }
+    .fx-desk::before {
+      left: 4%; right: 4%; bottom: -13px; height: 17px; border-radius: 50%; filter: blur(5px);
+      background: radial-gradient(ellipse, rgba(100,55,25,.38), transparent 70%);
+      animation: deskland-window-fx-shadow 4.4s ease-in-out infinite;
+    }
+    .fx-desk::after {
+      top: -4px; right: 12%; width: 34%; height: 3px; border-radius: 50%; filter: blur(1px);
+      background: linear-gradient(90deg, transparent, rgba(255,221,157,.75), transparent);
+      animation: deskland-window-fx-lamp 4s ease-in-out infinite;
+    }
+
+    /* Editor e terminal: linhas de varredura discretas, sem transformar a borda em neon forte. */
+    #deskland-window-effects > i.fx-ide { animation-name: deskland-window-fx-ide; }
+    .fx-ide::before, .fx-terminal::before {
+      left: -18%; width: 24%; top: -3px; height: 2px; border-radius: 2px; filter: blur(.5px);
+      background: linear-gradient(90deg, transparent, var(--fx-border), transparent);
+      animation: deskland-window-fx-scan 2.6s linear infinite;
+    }
+    .fx-ide::after {
+      top: 9%; bottom: 9%; left: -3px; width: 2px; background: var(--fx-glow); filter: blur(.5px);
+      animation: deskland-window-fx-cursor 1.8s steps(2, end) infinite;
+    }
+    #deskland-window-effects > i.fx-terminal { animation-name: deskland-window-fx-terminal; }
+    .fx-terminal { border-radius: var(--fx-radius); box-shadow: 0 0 6px 1px var(--fx-glow), 0 0 15px 1px var(--fx-halo); }
+    .fx-terminal::after {
+      left: 4%; right: 4%; top: 31%; height: 1px; background: rgba(154,255,177,.5); opacity: .4;
+      animation: deskland-window-fx-scanline 2.2s linear infinite;
+    }
+
+    /* Git, árvore e dashboard: pulsos curtos que lembram nós, conexões e telemetria. */
+    #deskland-window-effects > i.fx-gitgraph { animation-name: deskland-window-fx-git; border-style: dashed; }
+    .fx-gitgraph::before { inset: -6px; border: 1px solid rgba(88,166,255,.22); border-radius: 50%; animation: deskland-window-fx-node 2.5s ease-out infinite; }
+    .fx-gitgraph::after { left: 15%; right: 15%; top: -3px; height: 2px; background: linear-gradient(90deg, #f778ba, #58a6ff, #7ee787); animation: deskland-window-fx-data 2.4s linear infinite; }
+    #deskland-window-effects > i.fx-ast { animation-name: deskland-window-fx-ast; border-style: dotted; }
+    .fx-ast::before { left: 14%; right: 14%; top: -5px; height: 8px; background: radial-gradient(circle, rgba(217,72,15,.7) 0 2px, transparent 3px) 0 50% / 16px 8px repeat-x; animation: deskland-window-fx-node 3s ease-in-out infinite; }
+    .fx-ast::after { inset: -5px; border-left: 1px solid rgba(200,191,172,.28); border-right: 1px solid rgba(200,191,172,.28); animation: deskland-window-fx-branch 3.6s ease-in-out infinite; }
+    #deskland-window-effects > i.fx-dashboard { animation-name: deskland-window-fx-dashboard; }
+    .fx-dashboard::before { inset: -4px; border: 2px solid transparent; border-top-color: rgba(87,148,242,.75); border-right-color: rgba(115,191,105,.5); border-radius: 50%; animation: deskland-window-fx-meter 2.1s linear infinite; }
+    .fx-dashboard::after { left: 8%; right: 8%; bottom: -4px; height: 2px; background: linear-gradient(90deg, #2c4f8f, #5794f2, #fade2a, #5794f2); opacity: .6; animation: deskland-window-fx-data 2.8s linear infinite; }
+
+    /* Lago e cidade: ondulação elíptica e traços de chuva/neon. */
+    #deskland-window-effects > i.fx-pond { animation-name: deskland-window-fx-pond; }
+    .fx-pond::before, .fx-pond::after { left: 15%; right: 15%; bottom: -10px; height: 16px; border: 1px solid rgba(171,244,218,.5); border-radius: 50%; }
+    .fx-pond::before { animation: deskland-window-fx-ripple 3.2s ease-out infinite; }
+    .fx-pond::after { animation: deskland-window-fx-ripple 3.2s .9s ease-out infinite; }
+    #deskland-window-effects > i.fx-nightcity { animation-name: deskland-window-fx-nightcity; }
+    .fx-nightcity::before { inset: -8px; background: repeating-linear-gradient(112deg, transparent 0 16px, rgba(61,224,255,.2) 17px 18px, transparent 19px 32px); opacity: .45; animation: deskland-window-fx-rain 2.4s linear infinite; }
+    .fx-nightcity::after { left: 8%; right: 8%; bottom: -5px; height: 3px; background: linear-gradient(90deg, #ff3d7f, #ffd58a, #3de0ff); filter: blur(1px); animation: deskland-window-fx-neon 2.1s ease-in-out infinite; }
+
+    @keyframes deskland-window-fx-beach { 0%,100% { opacity: .55; } 50% { opacity: .9; transform: translateY(-1px); } }
+    @keyframes deskland-window-fx-foam { 0%,100% { transform: scaleX(.86); opacity: .55; } 50% { transform: scaleX(1); opacity: .9; } }
+    @keyframes deskland-window-fx-shimmer { from { transform: translateX(-20%); } to { transform: translateX(480%); } }
+    @keyframes deskland-window-fx-meadow { 0%,100% { opacity: .5; } 50% { opacity: .82; transform: translateY(1px); } }
+    @keyframes deskland-window-fx-shadow { 0%,100% { transform: scaleX(.86); opacity: .55; } 50% { transform: scaleX(1.05); opacity: .8; } }
+    @keyframes deskland-window-fx-pollen { 0%,100% { opacity: .2; transform: scale(.98); } 50% { opacity: .52; transform: scale(1.02); } }
+    @keyframes deskland-window-fx-space { 0%,100% { opacity: .48; } 50% { opacity: .86; transform: scale(1.005); } }
+    @keyframes deskland-window-fx-stars { 0%,100% { transform: translate(0,0); opacity: .35; } 50% { transform: translate(4px,-2px); opacity: .7; } }
+    @keyframes deskland-window-fx-orbit { to { transform: scaleX(1.04) rotate(360deg); } }
+    @keyframes deskland-window-fx-desk { 0%,100% { opacity: .48; } 50% { opacity: .78; } }
+    @keyframes deskland-window-fx-lamp { 0%,100% { opacity: .35; transform: scaleX(.7); } 50% { opacity: .8; transform: scaleX(1); } }
+    @keyframes deskland-window-fx-ide { 0%,100% { opacity: .42; } 45% { opacity: .9; } 52% { opacity: .58; } 60% { opacity: .86; } }
+    @keyframes deskland-window-fx-terminal { 0%,100% { opacity: .45; } 50% { opacity: .85; } }
+    @keyframes deskland-window-fx-scan { from { transform: translateX(0); } to { transform: translateX(500%); } }
+    @keyframes deskland-window-fx-cursor { 0%,45% { opacity: .2; } 50%,100% { opacity: .75; } }
+    @keyframes deskland-window-fx-scanline { from { transform: translateY(-20px); } to { transform: translateY(120px); } }
+    @keyframes deskland-window-fx-git { 0%,100% { opacity: .42; } 45% { opacity: .95; } 56% { opacity: .55; } }
+    @keyframes deskland-window-fx-ast { 0%,100% { opacity: .38; } 50% { opacity: .78; } }
+    @keyframes deskland-window-fx-dashboard { 0%,100% { opacity: .42; } 50% { opacity: .86; } }
+    @keyframes deskland-window-fx-node { 0%,100% { transform: scale(.94); opacity: .15; } 50% { transform: scale(1.04); opacity: .65; } }
+    @keyframes deskland-window-fx-data { from { background-position: 0 0; transform: translateX(-8%); } to { background-position: 100px 0; transform: translateX(8%); } }
+    @keyframes deskland-window-fx-branch { 0%,100% { transform: scaleY(.82); opacity: .2; } 50% { transform: scaleY(1); opacity: .58; } }
+    @keyframes deskland-window-fx-meter { to { transform: rotate(360deg); } }
+    @keyframes deskland-window-fx-pond { 0%,100% { opacity: .45; } 50% { opacity: .82; } }
+    @keyframes deskland-window-fx-ripple { 0% { transform: scaleX(.65); opacity: .65; } 100% { transform: scaleX(1.2) translateY(5px); opacity: 0; } }
+    @keyframes deskland-window-fx-nightcity { 0%,100% { opacity: .42; } 45% { opacity: .95; } 52% { opacity: .58; } 60% { opacity: .9; } }
+    @keyframes deskland-window-fx-rain { from { transform: translateY(-18px); } to { transform: translateY(24px); } }
+    @keyframes deskland-window-fx-neon { 0%,100% { opacity: .3; transform: scaleX(.7); } 50% { opacity: .9; transform: scaleX(1); } }
     @media (prefers-reduced-motion: reduce) { #deskland-window-effects > i { animation: none; } }
   `;
   document.head.appendChild(style);
@@ -101,7 +215,7 @@
       const w = Number(r[2] - r[0]) / k, h = Number(r[3] - r[1]) / k;
       if (![x, y, w, h].every(Number.isFinite) || w < 8 || h < 8) continue;
       const edge = document.createElement('i');
-      edge.className = 'fx-' + activeProfile.pulse;
+      edge.className = 'fx-' + activeProfile.name;
       edge.style.left = (x - 2) + 'px'; edge.style.top = (y - 2) + 'px';
       edge.style.width = (w + 4) + 'px'; edge.style.height = (h + 4) + 'px';
       edge.style.animationDelay = (-i * 0.11).toFixed(2) + 's';
