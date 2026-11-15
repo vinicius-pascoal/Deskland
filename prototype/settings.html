@@ -500,10 +500,27 @@ $('lang').addEventListener('change', e => {
 
 /* ---------- 主题清单 ---------- */
 const themeById = id => state.registry.themes.find(t => t.id === id);
+const WINDOW_FX_DEFAULTS = { windowFx: 1, windowFxIntensity: 0.65 };
+function windowFxGroup() {
+  const en = lang === 'en';
+  return {
+    name: en ? 'Window edges' : '窗口边缘',
+    params: [
+      { key: 'windowFx', label: en ? 'Window effects' : '窗口效果', hint: en ? 'Show a themed glow around visible, non-maximized windows' : '在可见且未最大化的窗口周围显示主题光效', options: en ? ['Off', 'On'] : ['关闭', '开启'], default: 1 },
+      { key: 'windowFxIntensity', label: en ? 'Effect intensity' : '效果强度', hint: en ? 'How visible the window-edge effect is' : '窗口边缘效果的明显程度', min: 0, max: 1, step: 0.05, default: 0.65, format: 'percent' }
+    ]
+  };
+}
+function groupsOf(theme) {
+  const groups = (theme && theme.groups || []).slice();
+  if (theme && theme.page) groups.push(windowFxGroup());
+  return groups;
+}
 function defaultsOf(theme) {
   const d = {};
   if (theme.adaptive) d.adaptive = 1;
   for (const g of theme.groups || []) for (const p of g.params) d[p.key] = p.default;
+  if (theme && theme.page) Object.assign(d, WINDOW_FX_DEFAULTS);
   return d;
 }
 function valuesOf(theme) { return Object.assign(defaultsOf(theme), state.params[theme.id] || {}); }
@@ -619,9 +636,9 @@ $('reseed').addEventListener('click', () => setSeed(newSeed(), true));
 
 /* ---------- 参数控件（按清单自动生成） ---------- */
 function renderControls() {
-  const theme = themeById(state.theme), vals = valuesOf(theme);
-  if (!theme.groups) { $('controls').innerHTML = '<div class="empty">' + t('noParams') + '</div>'; return; }
-  $('controls').innerHTML = theme.groups.map(g => `
+  const theme = themeById(state.theme), vals = valuesOf(theme), groups = groupsOf(theme);
+  if (!groups.length) { $('controls').innerHTML = '<div class="empty">' + t('noParams') + '</div>'; return; }
+  $('controls').innerHTML = groups.map(g => `
     <div class="group"><h3>${g.name}</h3>
       ${g.params.map(p => `
         <div class="param${vals[p.key] !== p.default ? ' changed' : ''}" id="p-${p.key}">
@@ -641,7 +658,7 @@ function renderControls() {
   $('controls').querySelectorAll('input[type=range]').forEach(fill);
 }
 function fill(inp) { inp.style.setProperty('--p', ((inp.value - inp.min) / (inp.max - inp.min) * 100) + '%'); }
-const paramOf = key => themeById(state.theme).groups.flatMap(g => g.params).find(x => x.key === key);
+const paramOf = key => groupsOf(themeById(state.theme)).flatMap(g => g.params).find(x => x.key === key);
 
 // 改一个参数：更新界面，并排队发给宿主和预览（拖动时每帧最多发一次）
 let pending = {}, scheduled = false;
@@ -761,6 +778,7 @@ addEventListener('message', e => {
     if (state.icons) toPreview(state.icons);
     if (state.windows) toPreview(state.windows);
   } else if (m.t === 'windowEffectsReady') {
+    toPreview({ t: 'settings', v: valuesOf(themeById(state.theme)) });
     if (state.windows) toPreview(state.windows);
   }
 });

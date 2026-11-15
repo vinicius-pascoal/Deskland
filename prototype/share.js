@@ -4,54 +4,117 @@
 // 所以图里不会露出任何文件名；设置窗口、别的窗口挡着桌面也没关系。
 // 用到主题页面里的：cv（画布）、draw()、icons、W、H、WALL；部分主题另有 renderLabels()、cacheOK
 // （2D 画布画的字、陆地上的画，画布大小变了要按新的大小重画）
-// 非最大化窗口效果：宿主把窗口的物理像素矩形发来，这里只在窗口外侧放一层
-// 不接收鼠标的边框光晕。壁纸位于窗口下方，因此不会遮挡窗口、抢焦点或影响拖动。
+// 窗口效果 API：宿主只负责提供矩形，主题页面负责选择风格和强度。
+// 壁纸位于窗口下方，因此效果只会出现在窗口外侧，不遮挡窗口、不抢焦点。
 (function () {
-    const qs = new URLSearchParams(location.search);
-    const wall = qs.has('wallpaper'), preview = qs.has('preview');
-    if (!wall && !preview) return;
-    const style = document.createElement('style');
-    style.textContent = `
-      #deskland-window-effects { position: fixed; inset: 0; pointer-events: none; z-index: 1; overflow: visible; }
-      #deskland-window-effects > i {
-        position: absolute; display: block; box-sizing: border-box; pointer-events: none;
-        border: 1px solid rgba(177, 226, 255, .42); border-radius: 7px;
-        box-shadow: 0 0 7px 1px rgba(90, 190, 255, .42), 0 0 18px 2px rgba(76, 128, 255, .22);
-        animation: deskland-window-edge-pulse 2.8s ease-in-out infinite;
-      }
-      @keyframes deskland-window-edge-pulse { 0%, 100% { opacity: .62; } 50% { opacity: 1; } }
-      @media (prefers-reduced-motion: reduce) { #deskland-window-effects > i { animation: none; } }
-    `;
-    document.head.appendChild(style);
-    const layer = document.createElement('div');
-    layer.id = 'deskland-window-effects';
-    document.body.appendChild(layer);
-    const ghosts = document.getElementById('ghosts');
-    if (ghosts) ghosts.style.zIndex = '2';
+  const qs = new URLSearchParams(location.search);
+  const wall = qs.has('wallpaper'), preview = qs.has('preview');
+  if (!wall && !preview) return;
 
-    let last = null;
-    function render(m) {
-      last = m;
-      layer.innerHTML = '';
-      const k = Math.max(1, window.devicePixelRatio || 1);
-      const rects = Array.isArray(m && m.r) ? m.r : [];
-      for (let i = 0; i < Math.min(rects.length, 48); i++) {
-        const r = rects[i];
-        if (!Array.isArray(r) || r.length < 4) continue;
-        const x = Number(r[0]) / k, y = Number(r[1]) / k;
-        const w = Number(r[2] - r[0]) / k, h = Number(r[3] - r[1]) / k;
-        if (![x, y, w, h].every(Number.isFinite) || w < 8 || h < 8) continue;
-        const edge = document.createElement('i');
-        edge.style.left = (x - 2) + 'px'; edge.style.top = (y - 2) + 'px';
-        edge.style.width = (w + 4) + 'px'; edge.style.height = (h + 4) + 'px';
-        edge.style.animationDelay = (-i * 0.11).toFixed(2) + 's';
-        layer.appendChild(edge);
+  const page = location.pathname.split('/').pop().toLowerCase();
+  const PROFILES = {
+    flat:      { name: 'beach',     border: 'rgba(185, 250, 244, .58)', glow: 'rgba(61, 223, 224, .48)', halo: 'rgba(16, 145, 199, .26)', radius: '12px', pulse: 'water' },
+    meadow:    { name: 'meadow',    border: 'rgba(223, 246, 155, .58)', glow: 'rgba(145, 211, 92, .45)',  halo: 'rgba(54, 126, 56, .25)',  radius: '14px', pulse: 'meadow' },
+    space:    { name: 'space',     border: 'rgba(207, 190, 255, .62)', glow: 'rgba(139, 92, 246, .48)',  halo: 'rgba(52, 109, 255, .28)', radius: '9px',  pulse: 'space' },
+    desk:     { name: 'desk',      border: 'rgba(255, 221, 157, .58)', glow: 'rgba(244, 171, 76, .40)',  halo: 'rgba(131, 73, 30, .24)',   radius: '8px',  pulse: 'warm' },
+    ide:      { name: 'ide',       border: 'rgba(192, 176, 255, .62)', glow: 'rgba(177, 101, 255, .48)', halo: 'rgba(71, 140, 255, .25)',  radius: '6px',  pulse: 'neon' },
+    terminal: { name: 'terminal',  border: 'rgba(154, 255, 177, .58)', glow: 'rgba(43, 220, 104, .45)',  halo: 'rgba(17, 104, 60, .25)',   radius: '4px',  pulse: 'phosphor' },
+    gitgraph: { name: 'gitgraph',  border: 'rgba(255, 177, 222, .58)', glow: 'rgba(247, 120, 186, .43)', halo: 'rgba(88, 166, 255, .25)',  radius: '7px',  pulse: 'neon' },
+    ast:      { name: 'ast',       border: 'rgba(255, 222, 185, .58)', glow: 'rgba(217, 72, 15, .38)',   halo: 'rgba(200, 191, 172, .24)', radius: '7px',  pulse: 'warm' },
+    dashboard:{ name: 'dashboard', border: 'rgba(173, 231, 255, .58)', glow: 'rgba(87, 148, 242, .45)',  halo: 'rgba(115, 191, 105, .25)', radius: '7px',  pulse: 'neon' },
+    pond:     { name: 'pond',      border: 'rgba(171, 244, 218, .58)', glow: 'rgba(74, 196, 170, .43)',  halo: 'rgba(29, 102, 118, .27)',  radius: '13px', pulse: 'water' },
+    nightcity:{ name: 'nightcity', border: 'rgba(255, 174, 232, .62)', glow: 'rgba(255, 61, 127, .48)',  halo: 'rgba(61, 224, 255, .30)',  radius: '5px',  pulse: 'neon' }
+  };
+  let activeProfile = PROFILES[page.replace(/\.html$/, '')] || PROFILES.flat;
+  const DEFAULTS = { windowFx: 1, windowFxIntensity: .65 };
+  const style = document.createElement('style');
+  style.textContent = `
+    #deskland-window-effects { position: fixed; inset: 0; pointer-events: none; z-index: 1; overflow: visible; }
+    #deskland-window-effects > i {
+      position: absolute; display: block; box-sizing: border-box; pointer-events: none;
+      border: 1px solid var(--fx-border); border-radius: var(--fx-radius);
+      box-shadow: 0 0 7px 1px var(--fx-glow), 0 0 18px 2px var(--fx-halo);
+      animation-duration: 2.8s; animation-timing-function: ease-in-out; animation-iteration-count: infinite;
+    }
+    #deskland-window-effects > i.fx-water { animation-name: deskland-window-fx-water; }
+    #deskland-window-effects > i.fx-meadow { animation-name: deskland-window-fx-meadow; }
+    #deskland-window-effects > i.fx-space { animation-name: deskland-window-fx-space; }
+    #deskland-window-effects > i.fx-warm { animation-name: deskland-window-fx-warm; }
+    #deskland-window-effects > i.fx-neon { animation-name: deskland-window-fx-neon; }
+    #deskland-window-effects > i.fx-phosphor { animation-name: deskland-window-fx-phosphor; }
+    @keyframes deskland-window-fx-water { 0%,100% { opacity: .55; } 50% { opacity: 1; box-shadow: 0 0 10px 1px var(--fx-glow), 0 0 22px 3px var(--fx-halo); } }
+    @keyframes deskland-window-fx-meadow { 0%,100% { opacity: .52; } 50% { opacity: .88; transform: translateY(1px); } }
+    @keyframes deskland-window-fx-space { 0%,100% { opacity: .48; } 50% { opacity: 1; box-shadow: 0 0 9px 2px var(--fx-glow), 0 0 25px 3px var(--fx-halo); } }
+    @keyframes deskland-window-fx-warm { 0%,100% { opacity: .48; } 50% { opacity: .82; } }
+    @keyframes deskland-window-fx-neon { 0%,100% { opacity: .42; } 45% { opacity: 1; } 52% { opacity: .62; } 60% { opacity: .92; } }
+    @keyframes deskland-window-fx-phosphor { 0%,100% { opacity: .48; } 50% { opacity: .95; } }
+    @media (prefers-reduced-motion: reduce) { #deskland-window-effects > i { animation: none; } }
+  `;
+  document.head.appendChild(style);
+  const layer = document.createElement('div');
+  layer.id = 'deskland-window-effects';
+  document.body.appendChild(layer);
+  const ghosts = document.getElementById('ghosts');
+  if (ghosts) ghosts.style.zIndex = '2';
+
+  const api = {
+    profile: activeProfile.name,
+    enabled: true,
+    intensity: DEFAULTS.windowFxIntensity,
+    rects: [],
+    configure(options) {
+      options = options || {};
+      if (typeof options.profile === 'string' && PROFILES[options.profile]) {
+        activeProfile = PROFILES[options.profile];
+        this.profile = activeProfile.name;
       }
+      if (typeof options.enabled === 'boolean') this.enabled = options.enabled;
+      if (typeof options.intensity === 'number' && Number.isFinite(options.intensity)) this.intensity = Math.max(0, Math.min(1, options.intensity));
+      render();
+    },
+    applySettings(values) {
+      values = values || {};
+      this.configure({
+        enabled: values.windowFx == null ? this.enabled : values.windowFx !== 0,
+        intensity: values.windowFxIntensity == null ? this.intensity : Number(values.windowFxIntensity)
+      });
+    },
+    setWindows(rects) { this.rects = Array.isArray(rects) ? rects : []; render(); }
+  };
+  window.DesklandWindowEffects = api;
+
+  let last = null;
+  function render() {
+    layer.innerHTML = '';
+    layer.hidden = !api.enabled || api.intensity <= 0 || !api.rects.length;
+    if (layer.hidden) return;
+    const k = Math.max(1, window.devicePixelRatio || 1);
+    layer.style.opacity = String(api.intensity);
+    layer.style.setProperty('--fx-border', activeProfile.border);
+    layer.style.setProperty('--fx-glow', activeProfile.glow);
+    layer.style.setProperty('--fx-halo', activeProfile.halo);
+    layer.style.setProperty('--fx-radius', activeProfile.radius);
+    for (let i = 0; i < Math.min(api.rects.length, 48); i++) {
+      const r = api.rects[i];
+      if (!Array.isArray(r) || r.length < 4) continue;
+      const x = Number(r[0]) / k, y = Number(r[1]) / k;
+      const w = Number(r[2] - r[0]) / k, h = Number(r[3] - r[1]) / k;
+      if (![x, y, w, h].every(Number.isFinite) || w < 8 || h < 8) continue;
+      const edge = document.createElement('i');
+      edge.className = 'fx-' + activeProfile.pulse;
+      edge.style.left = (x - 2) + 'px'; edge.style.top = (y - 2) + 'px';
+      edge.style.width = (w + 4) + 'px'; edge.style.height = (h + 4) + 'px';
+      edge.style.animationDelay = (-i * 0.11).toFixed(2) + 's';
+      layer.appendChild(edge);
     }
-    function receive(data) {
-      let m; try { m = typeof data === 'string' ? JSON.parse(data) : data; } catch (e) { return; }
-      if (m && m.t === 'windows') render(m);
-    }
+  }
+  function receive(data) {
+    let m; try { m = typeof data === 'string' ? JSON.parse(data) : data; } catch (e) { return; }
+    if (!m) return;
+    if (m.t === 'windows') { last = m; api.setWindows(m.r); }
+    else if (m.t === 'settings') api.applySettings(m.v);
+    else if (m.t === 'reset') api.applySettings(DEFAULTS);
+  }
     if (wall && window.chrome && window.chrome.webview) {
       window.chrome.webview.addEventListener('message', ev => receive(ev.data));
       window.chrome.webview.postMessage('windows|ready');

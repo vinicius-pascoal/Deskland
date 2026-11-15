@@ -1337,7 +1337,12 @@ class WallpaperForm : Form
                 // 正在播放的曲名、封面主色（Windows 媒体控件）
                 if (msg == "media|on") { MediaFeed.Subscribe(this); return; }
                 if (msg == "media|off") { MediaFeed.Unsubscribe(this); return; }
-                if (msg == "windows|ready") { if (lastWindows != null) Post(lastWindows); return; }
+                if (msg == "windows|ready")
+                {
+                    if (SettingsJson != null) core.PostWebMessageAsString(SettingsJson());
+                    if (lastWindows != null) Post(lastWindows);
+                    return;
+                }
                 core.PostWebMessageAsString(ScreensJson());
                 if (SettingsJson != null) core.PostWebMessageAsString(SettingsJson());
                 lastIcons = ""; lastWindows = null; lastPause = -1; PollIcons(); PollForeground();
