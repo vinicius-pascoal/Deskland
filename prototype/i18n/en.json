@@ -638,6 +638,32 @@
           ]
         }
       }
+    },
+    "ascii-city": {
+      "name": "ASCII City",
+      "desc": "Icons become buildings, shops and terminals; window edges turn into lit facades, audio drives signs and traffic, and the current media appears on the news screen",
+      "groups": ["City at night", "City information"],
+      "params": {
+        "palette": { "label": "Night palette", "hint": "The city's main color treatment", "options": ["Neon night", "Warm district", "Cool blue"] },
+        "density": { "label": "City density", "hint": "How active the buildings and data routes feel" },
+        "speed": { "label": "Traffic speed", "hint": "How quickly data pulses and city lights move" },
+        "audio": { "label": "Audio traffic", "hint": "Use volume and beats to drive sign brightness and traffic pulses", "options": ["Off", "On"] },
+        "media": { "label": "News screen", "hint": "Show the current media title and artist at the bottom of the city", "options": ["Hide", "Show"] },
+        "telemetry": { "label": "City telemetry", "hint": "Show network, memory and monitor count", "options": ["Hide", "Show"] }
+      }
+    },
+    "ascii-starship": {
+      "name": "ASCII Starship Bridge",
+      "desc": "The desktop becomes a starship command bridge; icons are system modules, windows are active decks, CPU and memory become energy and shields, and audio becomes radar communication",
+      "groups": ["Bridge appearance", "Flight data"],
+      "params": {
+        "palette": { "label": "Bridge palette", "hint": "The main colors of the console and hull", "options": ["Deep space blue", "Amber alert", "Cold blue"] },
+        "density": { "label": "Module density", "hint": "How many system modules and routes appear on the bridge" },
+        "speed": { "label": "Flight speed", "hint": "How quickly radar, pulses and hull indicators animate" },
+        "audio": { "label": "Radar comms", "hint": "Use volume and beats to drive radar and alert pulses", "options": ["Off", "On"] },
+        "media": { "label": "Incoming transmission", "hint": "Show the current music or media as a received transmission", "options": ["Hide", "Show"] },
+        "telemetry": { "label": "Flight telemetry", "hint": "Show CPU, memory, energy and screen count", "options": ["Hide", "Show"] }
+      }
     }
   }
 }

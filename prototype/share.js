@@ -23,7 +23,9 @@
     ast:      { name: 'ast',       border: 'rgba(255, 222, 185, .58)', glow: 'rgba(217, 72, 15, .38)',   halo: 'rgba(200, 191, 172, .24)', radius: '7px',  pulse: 'warm' },
     dashboard:{ name: 'dashboard', border: 'rgba(173, 231, 255, .58)', glow: 'rgba(87, 148, 242, .45)',  halo: 'rgba(115, 191, 105, .25)', radius: '7px',  pulse: 'neon' },
     pond:     { name: 'pond',      border: 'rgba(171, 244, 218, .58)', glow: 'rgba(74, 196, 170, .43)',  halo: 'rgba(29, 102, 118, .27)',  radius: '13px', pulse: 'water' },
-    nightcity:{ name: 'nightcity', border: 'rgba(255, 174, 232, .62)', glow: 'rgba(255, 61, 127, .48)',  halo: 'rgba(61, 224, 255, .30)',  radius: '5px',  pulse: 'neon' }
+    nightcity:{ name: 'nightcity', border: 'rgba(255, 174, 232, .62)', glow: 'rgba(255, 61, 127, .48)',  halo: 'rgba(61, 224, 255, .30)',  radius: '5px',  pulse: 'neon' },
+    'ascii-city': { name: 'ascii-city', border: 'rgba(114, 246, 255, .72)', glow: 'rgba(61, 223, 224, .58)', halo: 'rgba(255, 95, 190, .25)', radius: '2px', pulse: 'neon' },
+    'ascii-starship': { name: 'ascii-starship', border: 'rgba(169, 240, 255, .72)', glow: 'rgba(122, 167, 255, .55)', halo: 'rgba(194, 156, 255, .28)', radius: '3px', pulse: 'space' }
   };
   let activeProfile = PROFILES[page.replace(/\.html$/, '')] || PROFILES.flat;
   const DEFAULTS = { windowFx: 1, windowFxIntensity: .65 };
@@ -134,6 +136,16 @@
     .fx-nightcity::before { inset: -8px; background: repeating-linear-gradient(112deg, transparent 0 16px, rgba(61,224,255,.2) 17px 18px, transparent 19px 32px); opacity: .45; animation: deskland-window-fx-rain 2.4s linear infinite; }
     .fx-nightcity::after { left: 8%; right: 8%; bottom: -5px; height: 3px; background: linear-gradient(90deg, #ff3d7f, #ffd58a, #3de0ff); filter: blur(1px); animation: deskland-window-fx-neon 2.1s ease-in-out infinite; }
 
+    /* ASCII City: letreiros de fachada e linhas de tráfego entre os prédios. */
+    #deskland-window-effects > i.fx-ascii-city { animation-name: deskland-window-fx-ascii-city; border-style: solid; }
+    .fx-ascii-city::before { left: 8%; right: 8%; bottom: -5px; height: 2px; background: repeating-linear-gradient(90deg, rgba(114,246,255,.15) 0 5px, rgba(255,95,190,.78) 6px 10px, transparent 11px 18px); animation: deskland-window-fx-ascii-data 2.3s linear infinite; }
+    .fx-ascii-city::after { inset: -4px; border: 1px dotted rgba(114,246,255,.32); animation: deskland-window-fx-ascii-scan 3.6s ease-in-out infinite; }
+
+    /* ASCII Starship Bridge: pulsos de casco e arco de alerta ao redor do setor. */
+    #deskland-window-effects > i.fx-ascii-starship { animation-name: deskland-window-fx-ascii-starship; border-style: double; }
+    .fx-ascii-starship::before { inset: -7px; border: 1px solid rgba(122,167,255,.46); border-radius: 50%; animation: deskland-window-fx-ascii-orbit 4.4s linear infinite; }
+    .fx-ascii-starship::after { left: 14%; right: 14%; top: -4px; height: 3px; background: linear-gradient(90deg, transparent, rgba(255,95,190,.85), rgba(169,240,255,.9), transparent); animation: deskland-window-fx-ascii-pulse 1.9s ease-in-out infinite; }
+
     @keyframes deskland-window-fx-beach { 0%,100% { opacity: .55; } 50% { opacity: .9; } }
     @keyframes deskland-window-fx-foam { 0%,100% { transform: scaleX(.86); opacity: .55; } 50% { transform: scaleX(1); opacity: .9; } }
     @keyframes deskland-window-fx-shimmer { from { transform: translateX(-20%); } to { transform: translateX(480%); } }
@@ -162,6 +174,12 @@
     @keyframes deskland-window-fx-nightcity { 0%,100% { opacity: .42; } 45% { opacity: .95; } 52% { opacity: .58; } 60% { opacity: .9; } }
     @keyframes deskland-window-fx-rain { from { transform: translateY(-18px); } to { transform: translateY(24px); } }
     @keyframes deskland-window-fx-neon { 0%,100% { opacity: .3; transform: scaleX(.7); } 50% { opacity: .9; transform: scaleX(1); } }
+    @keyframes deskland-window-fx-ascii-city { 0%,100% { opacity: .5; } 45% { opacity: .95; } 55% { opacity: .62; } }
+    @keyframes deskland-window-fx-ascii-data { from { transform: translateX(-18%); } to { transform: translateX(18%); } }
+    @keyframes deskland-window-fx-ascii-scan { 0%,100% { opacity: .18; transform: scaleX(.98); } 50% { opacity: .7; transform: scaleX(1.02); } }
+    @keyframes deskland-window-fx-ascii-starship { 0%,100% { opacity: .52; } 50% { opacity: .98; } }
+    @keyframes deskland-window-fx-ascii-orbit { to { transform: rotate(360deg) scaleX(1.05); } }
+    @keyframes deskland-window-fx-ascii-pulse { 0%,100% { opacity: .25; transform: scaleX(.65); } 50% { opacity: .95; transform: scaleX(1); } }
     @media (prefers-reduced-motion: reduce) { #deskland-window-effects > i { animation: none; } }
   `;
   document.head.appendChild(style);

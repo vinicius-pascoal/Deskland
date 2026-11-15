@@ -879,6 +879,144 @@
           ]
         }
       ]
+    },
+    {
+      "id": "ascii-city",
+      "name": "ASCII 城市",
+      "desc": "图标变成建筑、商店和终端；窗口边缘成为发光的外墙，音频驱动招牌和交通，当前媒体显示在新闻屏上",
+      "page": "ascii-city.html",
+      "status": "ready",
+      "product": "free",
+      "thumb": "linear-gradient(rgba(114,246,255,.8), rgba(114,246,255,.8)) 10% 20% / 15% 3% no-repeat, linear-gradient(rgba(255,95,190,.9), rgba(255,95,190,.9)) 54% 34% / 18% 3% no-repeat, linear-gradient(#101c36, #101c36) 16% 100% / 18% 72% no-repeat, linear-gradient(#17264a, #17264a) 47% 100% / 22% 54% no-repeat, linear-gradient(#101c36, #101c36) 82% 100% / 20% 82% no-repeat, repeating-linear-gradient(90deg, transparent 0 5%, rgba(114,246,255,.25) 5.2% 5.5%), linear-gradient(#070b18, #02030a)",
+      "groups": [
+        {
+          "name": "城市夜景",
+          "params": [
+            {
+              "key": "palette",
+              "label": "夜色",
+              "hint": "城市的主色调",
+              "options": ["霓虹夜", "暖色街区", "冷蓝夜"],
+              "default": 0
+            },
+            {
+              "key": "density",
+              "label": "城市密度",
+              "hint": "建筑和数据线路的活跃程度",
+              "min": 0,
+              "max": 1,
+              "step": 0.05,
+              "default": 0.72,
+              "format": "percent"
+            },
+            {
+              "key": "speed",
+              "label": "交通速度",
+              "hint": "数据脉冲和城市灯光的移动速度",
+              "min": 0.25,
+              "max": 3,
+              "step": 0.05,
+              "default": 1,
+              "format": "times"
+            }
+          ]
+        },
+        {
+          "name": "城市信息",
+          "params": [
+            {
+              "key": "audio",
+              "label": "音频交通",
+              "hint": "音量和节拍驱动招牌亮度与交通脉冲",
+              "options": ["关闭", "开启"],
+              "default": 1
+            },
+            {
+              "key": "media",
+              "label": "新闻屏",
+              "hint": "在城市底部显示当前媒体标题和艺术家",
+              "options": ["隐藏", "显示"],
+              "default": 1
+            },
+            {
+              "key": "telemetry",
+              "label": "城市遥测",
+              "hint": "显示网络、内存和显示器数量",
+              "options": ["隐藏", "显示"],
+              "default": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ascii-starship",
+      "name": "ASCII 星舰舰桥",
+      "desc": "桌面变成星舰指挥桥；图标是系统模块，窗口是活动甲板，CPU 和内存成为能量与护盾，音频变成雷达通信",
+      "page": "ascii-starship.html",
+      "status": "ready",
+      "product": "free",
+      "thumb": "radial-gradient(circle at 50% 50%, rgba(255,95,190,.85) 0 3%, transparent 3.5%), linear-gradient(150deg, transparent 48%, rgba(169,240,255,.65) 49% 50%, transparent 51%) 50% 50% / 62% 70% no-repeat, linear-gradient(rgba(169,240,255,.7), rgba(169,240,255,.7)) 12% 22% / 22% 3% no-repeat, linear-gradient(rgba(122,167,255,.75), rgba(122,167,255,.75)) 68% 72% / 20% 3% no-repeat, repeating-linear-gradient(0deg, transparent 0 9%, rgba(122,167,255,.18) 9.2% 9.5%), #050810",
+      "groups": [
+        {
+          "name": "舰桥外观",
+          "params": [
+            {
+              "key": "palette",
+              "label": "舰桥配色",
+              "hint": "控制台和舰体的主色调",
+              "options": ["深空蓝", "琥珀警戒", "冷冻蓝"],
+              "default": 2
+            },
+            {
+              "key": "density",
+              "label": "模块密度",
+              "hint": "舰桥上显示的系统模块和线路数量",
+              "min": 0,
+              "max": 1,
+              "step": 0.05,
+              "default": 0.72,
+              "format": "percent"
+            },
+            {
+              "key": "speed",
+              "label": "飞行速度",
+              "hint": "雷达、脉冲和舰体指示灯的动画速度",
+              "min": 0.25,
+              "max": 3,
+              "step": 0.05,
+              "default": 1,
+              "format": "times"
+            }
+          ]
+        },
+        {
+          "name": "飞行数据",
+          "params": [
+            {
+              "key": "audio",
+              "label": "雷达通信",
+              "hint": "音量和节拍驱动雷达与警报脉冲",
+              "options": ["关闭", "开启"],
+              "default": 1
+            },
+            {
+              "key": "media",
+              "label": "接收传输",
+              "hint": "显示当前音乐或媒体作为接收中的通信",
+              "options": ["隐藏", "显示"],
+              "default": 1
+            },
+            {
+              "key": "telemetry",
+              "label": "飞行遥测",
+              "hint": "显示 CPU、内存、能源和屏幕数量",
+              "options": ["隐藏", "显示"],
+              "default": 1
+            }
+          ]
+        }
+      ]
     }
   ]
 }
