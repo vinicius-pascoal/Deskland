@@ -31,7 +31,9 @@
     pond:      { name: 'pond',      glow: 'rgba(74, 196, 170, .43)',  halo: 'rgba(29, 102, 118, .27)', radius: '13px', parts: ['', ''] },
     nightcity: { name: 'nightcity', glow: 'rgba(255, 61, 127, .48)',  halo: 'rgba(61, 224, 255, .30)', radius: '5px',  parts: ['OPEN 24H', '', '', ''] },
     'ascii-city':     { name: 'ascii-city',     glow: 'rgba(61, 223, 224, .58)',  halo: 'rgba(255, 95, 190, .25)', radius: '2px', parts: ['+--[ CITY ]--', 'o=o>', '<o=o', '▚▞ 88 ▚▞'] },
-    'ascii-starship': { name: 'ascii-starship', glow: 'rgba(122, 167, 255, .55)', halo: 'rgba(194, 156, 255, .28)', radius: '3px', parts: ['◢ HULL 98% ◣', '[ SHIELDS ]', '', 'NAV ▸ 0.82c'] }
+    'ascii-starship': { name: 'ascii-starship', glow: 'rgba(122, 167, 255, .55)', halo: 'rgba(194, 156, 255, .28)', radius: '3px', parts: ['◢ HULL 98% ◣', '[ SHIELDS ]', '', 'NAV ▸ 0.82c'] },
+    'ascii-datacenter': { name: 'ascii-datacenter', glow: 'rgba(124, 216, 255, .5)', halo: 'rgba(92, 255, 157, .22)', radius: '3px', parts: ['', '', '', 'NODE-07'] },
+    'ascii-dungeon':    { name: 'ascii-dungeon',    glow: 'rgba(255, 170, 80, .45)', halo: 'rgba(255, 122, 47, .22)', radius: '2px', parts: ['', '', '@', ''] }
   };
   let activeProfile = PROFILES[page.replace(/\.html$/, '')] || PROFILES.flat;
   const DEFAULTS = { windowFx: 1, windowFxIntensity: .65 };
@@ -311,6 +313,41 @@
     }
     .fx-ascii-starship > .p4 { left: 14px; top: calc(100% + 12px); animation: dwfx-glowtext 3s ease-in-out infinite; }
 
+    /* ---------- ASCII Data Center: LEDs na orelha do rack, pacote descendo pelo cabo, etiqueta do nó ---------- */
+    .fx-ascii-datacenter::before, .fx-ascii-datacenter::after { content: none; }
+    .fx-ascii-datacenter > .p1, .fx-ascii-datacenter > .p2 {
+      left: calc(100% + 5px); width: 4px; height: 4px; border-radius: 50%; animation: dwfx-blink .9s steps(2, end) infinite;
+    }
+    .fx-ascii-datacenter > .p1 { top: 14px; background: #5cff9d; box-shadow: 0 0 5px #5cff9d; }
+    .fx-ascii-datacenter > .p2 { top: 24px; background: #ffd166; box-shadow: 0 0 5px #ffd166; animation-duration: 1.7s; }
+    .fx-ascii-datacenter > .p3 {
+      left: calc(30% + 9.5px); top: 100%; width: 5px; height: 5px; border-radius: 50%;
+      background: #e8f6ff; box-shadow: 0 0 6px #7cd8ff; animation: dwfx-cable 1.8s linear infinite;
+    }
+    .fx-ascii-datacenter > .p4 {
+      left: 10px; top: -17px; padding: 2px 6px; border-radius: 2px; color: #7cd8ff;
+      background: #16202e; border: 1px solid rgba(124,216,255,.6); text-shadow: 0 0 4px rgba(124,216,255,.7);
+    }
+
+    /* ---------- ASCII Dungeon: chamas das tochas, aventureiro andando e morcego ---------- */
+    .fx-ascii-dungeon::before, .fx-ascii-dungeon::after { content: none; }
+    .fx-ascii-dungeon > .p1, .fx-ascii-dungeon > .p2 {
+      top: -5px; width: 6px; height: 9px; border-radius: 50% 50% 40% 40%; transform-origin: 50% 100%;
+      background: radial-gradient(ellipse at 50% 70%, #fff3b0 0 25%, #ffb347 45%, #ff6a1f 70%, transparent 72%);
+      box-shadow: 0 0 10px 3px rgba(255,140,50,.45); animation: dwfx-flame .5s ease-in-out infinite alternate;
+    }
+    .fx-ascii-dungeon > .p1 { left: -18px; }
+    .fx-ascii-dungeon > .p2 { left: calc(100% + 12px); animation-delay: -.25s; }
+    .fx-ascii-dungeon > .p3 {
+      left: 0; top: calc(100% + 12px); font-size: 11px; color: #f2e6c8; text-shadow: 0 0 6px rgba(255,211,107,.9);
+      animation: dwfx-drive 14s linear infinite;
+    }
+    .fx-ascii-dungeon > .p4 {
+      left: 40%; top: -24px; width: 14px; height: 6px; animation: dwfx-butterfly 5s ease-in-out infinite;
+      background: radial-gradient(4px 2.2px at 25% 40%, #b3a587 0 90%, transparent 100%), radial-gradient(4px 2.2px at 75% 40%, #b3a587 0 90%, transparent 100%),
+                  radial-gradient(circle at 50% 55%, #8a7b66 0 2px, transparent 2.4px);
+    }
+
     @keyframes dwfx-foam { 0%,100% { transform: scaleX(.86); opacity: .55; } 50% { transform: scaleX(1); opacity: .95; } }
     @keyframes dwfx-shimmer { from { transform: translateX(-20%); } to { transform: translateX(480%); } }
     @keyframes dwfx-drift { from { transform: translateX(-6px); opacity: .55; } to { transform: translateX(6px); opacity: .95; } }
@@ -359,6 +396,8 @@
     @keyframes dwfx-flicker { 0%,40%,44%,47%,100% { opacity: 1; } 42%,45.5% { opacity: .25; } 70% { opacity: .85; } }
     @keyframes dwfx-drive { 0% { transform: translateX(-30px); opacity: 0; } 5% { opacity: 1; } 95% { opacity: 1; } 100% { transform: translateX(var(--w)); opacity: 0; } }
     @keyframes dwfx-fly { 0% { transform: translateX(30px); opacity: 0; } 5% { opacity: 1; } 95% { opacity: 1; } 100% { transform: translateX(calc(var(--w) * -1)); opacity: 0; } }
+    @keyframes dwfx-cable { 0% { transform: translate(0, 0); opacity: 0; } 10% { opacity: 1; } 100% { transform: translate(-1px, 44px); opacity: 0; } }
+    @keyframes dwfx-flame { from { transform: scale(.85, .9) skewX(-4deg); opacity: .85; } to { transform: scale(1.05, 1.15) skewX(5deg); opacity: 1; } }
     @media (prefers-reduced-motion: reduce) { #deskland-window-effects *, #deskland-window-effects *::before, #deskland-window-effects *::after { animation: none !important; } }
   `;
   document.head.appendChild(style);
@@ -798,6 +837,48 @@
       c.lineWidth = .8; c.beginPath(); c.arc(rx, ry, r, 0, TAU); c.moveTo(rx + r * .6, ry); c.arc(rx, ry, r * .6, 0, TAU);
       c.moveTo(rx - r, ry); c.lineTo(rx + r, ry); c.moveTo(rx, ry - r); c.lineTo(rx, ry + r); c.stroke();
       dot(c, rx + 6, ry - 8, 1.5, '#ff5fbe'); dot(c, rx - 9, ry + 4, 1.2, '#ff5fbe'); dot(c, rx + 3, ry + 11, 1.2, '#ffd166');
+    },
+
+    'ascii-datacenter'(c, x, y, w, h, R) {
+      // orelhas de rack dos dois lados, com furos de parafuso
+      [x - 13, x + w + 2].forEach(ex => {
+        rr(c, ex, y + 2, 11, h - 4, 2); c.fillStyle = '#16202e'; c.fill();
+        c.strokeStyle = 'rgba(124,216,255,.45)'; c.lineWidth = 1; c.stroke();
+        for (let sy = y + 40; sy < y + h - 6; sy += 18) {
+          dot(c, ex + 5.5, sy, 2.2, '#05080d');
+          c.beginPath(); c.arc(ex + 5.5, sy, 2.2, 0, TAU); c.strokeStyle = 'rgba(160,180,200,.6)'; c.stroke();
+        }
+      });
+      [y + 16, y + 26].forEach(ly => dot(c, x + w + 7, ly, 2, 'rgba(40,60,50,.9)'));   // LEDs apagados (os acesos são animados)
+      // feixe de cabos coloridos saindo por baixo, preso por uma abraçadeira
+      ['#ffd166', '#5cff9d', '#7cd8ff', '#ff5f6d', '#c29cff'].forEach((col, i) => {
+        const sx = x + w * .3 + i * 6;
+        c.beginPath(); c.moveTo(sx, y + h); c.bezierCurveTo(sx, y + h + 18, sx - 6 + i * 2, y + h + 26, sx - 4 + i * 1.5, y + h + 46);
+        c.strokeStyle = col; c.globalAlpha = .8; c.lineWidth = 2; c.stroke(); c.globalAlpha = 1;
+      });
+      c.fillStyle = '#2a3546'; c.fillRect(x + w * .3 - 3, y + h + 12, 32, 4);
+    },
+
+    'ascii-dungeon'(c, x, y, w, h, R) {
+      // moldura de tijolos de pedra em volta da janela
+      const b = 9;
+      c.save(); c.beginPath(); c.rect(x - b, y - b, w + 2 * b, h + 2 * b); c.rect(x, y, w, h); c.clip('evenodd');
+      c.fillStyle = '#3b332a'; c.fillRect(x - b, y - b, w + 2 * b, h + 2 * b);
+      c.strokeStyle = 'rgba(15,10,6,.85)'; c.lineWidth = 1;
+      for (let row = 0, by = y - b; by < y + h + b; by += 6, row++) {
+        for (let bx = x - b + (row % 2 ? 7 : 0) - 7; bx < x + w + b; bx += 14) {
+          c.fillStyle = `rgba(255,230,190,${(R() * .1).toFixed(3)})`; c.fillRect(bx + 1, by + 1, 12, 4);
+          c.beginPath(); c.moveTo(bx, by); c.lineTo(bx, by + 6); c.stroke();
+        }
+        c.beginPath(); c.moveTo(x - b, by); c.lineTo(x + w + b, by); c.stroke();
+      }
+      c.restore();
+      c.strokeStyle = 'rgba(255,200,140,.25)'; c.lineWidth = 1; c.strokeRect(x - b + .5, y - b + .5, w + 2 * b - 1, h + 2 * b - 1);
+      // suportes das tochas (as chamas são animadas)
+      [x - b - 6, x + w + b + 6].forEach(tx => { c.fillStyle = '#5a4632'; c.fillRect(tx - 1.5, y + 6, 3, 12); c.fillStyle = '#7a6040'; c.fillRect(tx - 4, y + 4, 8, 3); });
+      // chão da masmorra onde o aventureiro anda
+      c.font = `10px ${MONO}`; c.fillStyle = 'rgba(216,195,154,.5)'; c.textAlign = 'left'; c.textBaseline = 'middle';
+      c.fillText('. '.repeat(Math.max(0, Math.floor((w + 2 * b) / 11))), x - b, y + h + b + 8);
     }
   };
 

@@ -664,6 +664,32 @@
         "media": { "label": "Incoming transmission", "hint": "Show the current music or media as a received transmission", "options": ["Hide", "Show"] },
         "telemetry": { "label": "Flight telemetry", "hint": "Show CPU, memory, energy and screen count", "options": ["Hide", "Show"] }
       }
+    },
+    "ascii-datacenter": {
+      "name": "ASCII Data Center",
+      "desc": "The desktop becomes a server hall: racks on both sides blink with CPU load, network traffic turns into packets racing along the cable trays, and icons become numbered servers",
+      "groups": ["Hall appearance", "Hall monitoring"],
+      "params": {
+        "palette": { "label": "Hall lighting", "hint": "The main color of the server hall", "options": ["Cold aisle", "Hot aisle", "Green room"] },
+        "density": { "label": "Equipment density", "hint": "How full of equipment and LEDs the racks are" },
+        "speed": { "label": "Running speed", "hint": "How quickly fans, LEDs and packets animate" },
+        "audio": { "label": "Audio load", "hint": "Use volume and beats to flash the LEDs together and speed up packets", "options": ["Off", "On"] },
+        "media": { "label": "Log announcements", "hint": "Show the current media title and artist in the system log at the bottom", "options": ["Hide", "Show"] },
+        "telemetry": { "label": "Rack monitor", "hint": "Show CPU, memory, network and monitor count", "options": ["Hide", "Show"] }
+      }
+    },
+    "ascii-dungeon": {
+      "name": "ASCII Dungeon",
+      "desc": "The desktop becomes a top-down dungeon map: icons become rooms linked by corridors, torches flicker, an adventurer @ explores between rooms, and CPU and memory become health and mana",
+      "groups": ["Dungeon appearance", "Adventure info"],
+      "params": {
+        "palette": { "label": "Dungeon style", "hint": "The main colors of the stone walls and torchlight", "options": ["Torchlit cavern", "Frost crypt", "Mossy ruins"] },
+        "density": { "label": "Room count", "hint": "How many extra rooms and treasures appear besides the icon rooms" },
+        "speed": { "label": "Exploration speed", "hint": "How quickly the adventurer, torches and small creatures move" },
+        "audio": { "label": "Audio torchlight", "hint": "Use volume and beats to make torches flare and creatures scatter", "options": ["Off", "On"] },
+        "media": { "label": "Bard", "hint": "Announce the current media as a bard's song in the log at the bottom", "options": ["Hide", "Show"] },
+        "telemetry": { "label": "Character status", "hint": "Show health, mana, experience and monitor count", "options": ["Hide", "Show"] }
+      }
     }
   }
 }

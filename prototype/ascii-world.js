@@ -1,4 +1,4 @@
-/* Deskland · núcleo compartilhado de ASCII City / ASCII Starship Bridge.
+/* Deskland · núcleo compartilhado de ASCII City / Starship Bridge / Data Center / Dungeon.
    Tudo é desenhado numa grade de caracteres monoespaçados. A cena estática (céu, lua, prédios, rua,
    nebulosa, planeta, console, molduras do HUD) vai para um canvas de cache, refeito só quando mudam o
    tamanho, a paleta, a densidade ou os ícones. Cada quadro copia o cache e desenha por cima apenas o que
@@ -7,7 +7,8 @@
 (function () {
   'use strict';
 
-  var mode = document.body.dataset.mode === 'starship' ? 'starship' : 'city';
+  var MODES = ['city', 'starship', 'datacenter', 'dungeon'];
+  var mode = MODES.indexOf(document.body.dataset.mode) >= 0 ? document.body.dataset.mode : 'city';
   var qs = new URLSearchParams(location.search);
   var WALL = qs.has('wallpaper'), PREVIEW = qs.has('preview');
   var cv = document.getElementById('art'), ctx = cv.getContext('2d', { alpha: false });
@@ -17,19 +18,34 @@
   var stats = { cpu: 0, mem: 0, rx: 0, tx: 0, bat: -1, ac: true, procs: 0 };
   var track = null, audioOff = null, mediaOff = null;
   var P = {
-    palette: mode === 'city' ? 0 : 2, density: 0.72, speed: 1,
+    palette: mode === 'starship' ? 2 : 0, density: 0.72, speed: 1,
     audio: 1, media: 1, telemetry: 1, windowFx: 1, windowFxIntensity: .7
   };
   var DEFAULTS = Object.assign({}, P);
-  var PALETTES = mode === 'city' ? [
-    { bg: '#05070f', sky: '#26134d', street: '#090b1a', far: '#11143a', near: '#070916', fg: '#72f6ff', hot: '#ff5fbe', warm: '#ffd166', mid: '#a7b9d6', rain: '#7fb8ff', moon: '#f4eed8' },
-    { bg: '#0a0604', sky: '#4f2610', street: '#120a06', far: '#2c170a', near: '#0f0804', fg: '#ffc15c', hot: '#ff6e43', warm: '#ffe6b0', mid: '#e6c899', rain: '#e0b070', moon: '#fff1d0' },
-    { bg: '#03070d', sky: '#123a5e', street: '#060c16', far: '#0f2440', near: '#040a13', fg: '#9ee7ff', hot: '#c29cff', warm: '#e8f4ff', mid: '#c8d9ec', rain: '#a8d4ff', moon: '#e8f6ff' }
-  ] : [
-    { bg: '#02040a', neb1: '#7445d6', neb2: '#1f86c4', hull: '#0a1020', fg: '#8be9fd', hot: '#ff79c6', warm: '#ffd580', mid: '#b9c8df', planet: '#ff9e7a', ring: '#ffd580' },
-    { bg: '#070402', neb1: '#b9601f', neb2: '#86621f', hull: '#140c06', fg: '#ffd580', hot: '#ff8a65', warm: '#fff0c0', mid: '#f0d6a4', planet: '#ffb070', ring: '#fff0c0' },
-    { bg: '#02070c', neb1: '#2276ab', neb2: '#4256c9', hull: '#081420', fg: '#a9f0ff', hot: '#7aa7ff', warm: '#e0fbff', mid: '#c6e6ef', planet: '#9fd8ff', ring: '#e0fbff' }
-  ];
+  var PALETTES = {
+    city: [
+      { bg: '#05070f', sky: '#26134d', street: '#090b1a', far: '#11143a', near: '#070916', fg: '#72f6ff', hot: '#ff5fbe', warm: '#ffd166', mid: '#a7b9d6', rain: '#7fb8ff', moon: '#f4eed8' },
+      { bg: '#0a0604', sky: '#4f2610', street: '#120a06', far: '#2c170a', near: '#0f0804', fg: '#ffc15c', hot: '#ff6e43', warm: '#ffe6b0', mid: '#e6c899', rain: '#e0b070', moon: '#fff1d0' },
+      { bg: '#03070d', sky: '#123a5e', street: '#060c16', far: '#0f2440', near: '#040a13', fg: '#9ee7ff', hot: '#c29cff', warm: '#e8f4ff', mid: '#c8d9ec', rain: '#a8d4ff', moon: '#e8f6ff' }
+    ],
+    starship: [
+      { bg: '#02040a', neb1: '#7445d6', neb2: '#1f86c4', hull: '#0a1020', fg: '#8be9fd', hot: '#ff79c6', warm: '#ffd580', mid: '#b9c8df', planet: '#ff9e7a', ring: '#ffd580' },
+      { bg: '#070402', neb1: '#b9601f', neb2: '#86621f', hull: '#140c06', fg: '#ffd580', hot: '#ff8a65', warm: '#fff0c0', mid: '#f0d6a4', planet: '#ffb070', ring: '#fff0c0' },
+      { bg: '#02070c', neb1: '#2276ab', neb2: '#4256c9', hull: '#081420', fg: '#a9f0ff', hot: '#7aa7ff', warm: '#e0fbff', mid: '#c6e6ef', planet: '#9fd8ff', ring: '#e0fbff' }
+    ],
+    // corredor frio (azul), corredor quente (âmbar) e sala verde
+    datacenter: [
+      { bg: '#03060b', wall: '#0c1828', floor: '#060d18', fg: '#7cd8ff', hot: '#ff5f6d', warm: '#ffd166', ok: '#5cff9d', mid: '#9fb6cc', light: '#e8f6ff' },
+      { bg: '#0a0503', wall: '#211108', floor: '#120804', fg: '#ffb35c', hot: '#ff4b3a', warm: '#ffe08a', ok: '#9dff6a', mid: '#e0c09a', light: '#fff1dc' },
+      { bg: '#020803', wall: '#08190d', floor: '#041008', fg: '#5cff9d', hot: '#ff5f6d', warm: '#d9ff6a', ok: '#5cff9d', mid: '#9fd9b0', light: '#eaffef' }
+    ],
+    // caverna com tochas, cripta gelada e ruínas com musgo
+    dungeon: [
+      { bg: '#050403', floor: '#d8c39a', wall: '#a8957a', corr: '#7d6f5a', fg: '#f2e6c8', hot: '#ff7a2f', warm: '#ffd36b', water: '#4fb3ff', mid: '#b3a587' },
+      { bg: '#03060a', floor: '#b4d2ea', wall: '#7393b0', corr: '#566e85', fg: '#e6f6ff', hot: '#7fd4ff', warm: '#e9f7ff', water: '#5ef0ff', mid: '#93adc2' },
+      { bg: '#040603', floor: '#c4d4a4', wall: '#86a06e', corr: '#647654', fg: '#e8f3d0', hot: '#ffb347', warm: '#fff0a0', water: '#5fd3b0', mid: '#9cad86' }
+    ]
+  }[mode];
   var AU = { level: 0, beat: 0, bass: 0, mid: 0, high: 0 };
   var palette = PALETTES[P.palette];
   var FS = 14, CW = 8.4, CH = 16, COLS = 1, ROWS = 1, BOT = 0;   // BOT: última linha inteira visível
@@ -112,14 +128,45 @@
     var tel = P.telemetry && COLS > tw + 40 ? { col: COLS - 34, row: 1, w: 32, h: 6 } : null;
     return { title: { col: 2, row: 1, w: tw, h: 3 }, tel: tel };
   }
+  var TITLES = { city: 'ASCII CITY // NIGHT GRID', starship: 'STARSHIP BRIDGE // FLIGHT COMPUTER', datacenter: 'DATA CENTER // HALL B-07', dungeon: 'DUNGEON // DEPTH 3' };
+  var TELE = { city: 'TELEMETRY', starship: 'TELEMETRY', datacenter: 'RACK MONITOR', dungeon: 'CHARACTER' };
+  var TICKER = { city: ' NEWS ▸', starship: 'COMMS ▸', datacenter: 'SYSLOG▸', dungeon: '  LOG ▸' };
   function buildHud(c) {
     var p = palette, L = hudLayout();
     setFont(c, true);
-    panel(c, L.title, mode === 'city' ? 'ASCII CITY // NIGHT GRID' : 'STARSHIP BRIDGE // FLIGHT COMPUTER', rgba(p.fg, .85));
-    if (L.tel) panel(c, L.tel, 'TELEMETRY', rgba(p.fg, .85));
+    panel(c, L.title, TITLES[mode], rgba(p.fg, .85));
+    if (L.tel) panel(c, L.tel, TELE[mode], rgba(p.fg, .85));
     c.fillStyle = rgba(p.bg, .9); c.fillRect(0, BOT * CH, W, H - BOT * CH);
-    puts(c, mode === 'city' ? ' NEWS ▸' : 'COMMS ▸', 1, BOT, p.hot);
+    puts(c, TICKER[mode], 1, BOT, p.hot);
     setFont(c);
+  }
+  // Por modo: linha de status, linhas da telemetria ([rótulo, valor 0-100 | null, cor, texto]) e letreiro.
+  function hudInfo() {
+    var p = palette, cpu = Math.round(stats.cpu), mem = Math.round(stats.mem), net = '↓' + kb(stats.rx) + '  ↑' + kb(stats.tx);
+    var t = P.media && track;
+    if (mode === 'city') return {
+      status: 'TRAFFIC ' + kb(stats.rx + stats.tx) + '/s   MEM ' + mem + '%   ' + (AU.level > .5 ? 'PULSE HIGH' : 'GRID STABLE'),
+      rows: [['CPU', stats.cpu, p.fg], ['MEM', stats.mem, p.hot], ['NET', null, null, net]],
+      msg: (t ? '♪ ' + t.title + ' — ' + t.artist : 'waiting for transmission...') + '     •     NIGHT GRID ONLINE     •     RAIN ALERT: LIGHT     •     '
+    };
+    if (mode === 'starship') return {
+      status: 'ENERGY ' + (100 - cpu) + '%   SHIELD ' + (100 - mem) + '%   ' + (AU.beat > .5 ? 'CONTACT' : 'COURSE STEADY'),
+      rows: [['CPU', stats.cpu, p.fg], ['MEM', stats.mem, p.hot], ['WRP', 25 + AU.level * 75, p.warm]],
+      msg: (t ? '♪ ' + t.title + ' — ' + t.artist : 'no incoming transmission...') + '     •     ALL DECKS NOMINAL     •     HEADING 042 MARK 7     •     '
+    };
+    if (mode === 'datacenter') return {
+      status: 'RACKS ' + (scene && scene.racks || 0) + '   TEMP ' + (19 + stats.cpu * .12).toFixed(1) + '°C   LOAD ' + cpu + '%   ' + (stats.cpu > 85 ? 'THROTTLING' : 'ALL NODES UP'),
+      rows: [['CPU', stats.cpu, p.ok], ['MEM', stats.mem, p.warm], ['NET', null, null, net]],
+      msg: (t ? 'audio-svc: now playing "' + t.title + '" by ' + t.artist : 'audio-svc: idle') +
+        '     •     kernel: eth0 link up 10Gb/s     •     raid: all disks healthy     •     cron: nightly backup completed     •     '
+    };
+    var h = scene && scene.hero;
+    return {
+      status: 'HP ' + (100 - cpu) + '/100   MP ' + (100 - mem) + '/100   GOLD ' + (scene && scene.gold || 0) + '   TURN ' + (h ? h.turn : 0),
+      rows: [['HP', 100 - stats.cpu, p.hot], ['MP', 100 - stats.mem, p.water], ['XP', clamp((stats.rx + stats.tx) / 20000, 4, 100), p.warm]],
+      msg: (t ? 'A bard sings "' + t.title + '" by ' + t.artist + '.' : 'The halls are silent.') +
+        '     •     You hear water dripping somewhere.     •     A torch flickers in the draft.     •     Something scurries in the dark.     •     '
+    };
   }
   function buildIcons(c) {
     var p = palette;
@@ -132,25 +179,20 @@
     });
   }
   function dynHud(t) {
-    var p = palette, L = hudLayout(), s = t / 1000;
+    var p = palette, L = hudLayout(), s = t / 1000, info = hudInfo();
     setFont(ctx);
-    var status = mode === 'city'
-      ? 'TRAFFIC ' + kb(stats.rx + stats.tx) + '/s   MEM ' + Math.round(stats.mem) + '%   ' + (AU.level > .5 ? 'PULSE HIGH' : 'GRID STABLE')
-      : 'ENERGY ' + Math.round(100 - stats.cpu) + '%   SHIELD ' + Math.round(100 - stats.mem) + '%   ' + (AU.beat > .5 ? 'CONTACT' : 'COURSE STEADY');
-    puts(ctx, status.slice(0, L.title.w - 4), L.title.col + 2, L.title.row + 1, p.mid);
+    puts(ctx, info.status.slice(0, L.title.w - 4), L.title.col + 2, L.title.row + 1, p.mid);
     if (L.tel) {
       var x = L.tel.col + 2, y = L.tel.row + 1, n = 14;
-      puts(ctx, 'CPU', x, y, p.mid); puts(ctx, bar(stats.cpu, n), x + 5, y, p.fg); puts(ctx, String(Math.round(stats.cpu)).padStart(3) + '%', x + 6 + n, y, p.mid);
-      puts(ctx, 'MEM', x, y + 1, p.mid); puts(ctx, bar(stats.mem, n), x + 5, y + 1, p.hot); puts(ctx, String(Math.round(stats.mem)).padStart(3) + '%', x + 6 + n, y + 1, p.mid);
-      if (mode === 'city') puts(ctx, 'NET  ↓' + kb(stats.rx) + '  ↑' + kb(stats.tx), x, y + 2, p.mid);
-      else { puts(ctx, 'WRP', x, y + 2, p.mid); puts(ctx, bar(25 + AU.level * 75, n), x + 5, y + 2, p.warm); }
+      info.rows.forEach(function (row, j) {
+        puts(ctx, row[0], x, y + j, p.mid);
+        if (row[1] == null) { puts(ctx, row[3], x + 5, y + j, p.mid); return; }
+        puts(ctx, bar(row[1], n), x + 5, y + j, row[2]); puts(ctx, String(Math.round(clamp(row[1], 0, 100))).padStart(3) + '%', x + 6 + n, y + j, p.mid);
+      });
       puts(ctx, 'MON  ' + (screens.length || 1) + '    AUDIO ' + (P.audio ? 'ON' : 'OFF'), x, y + 3, p.mid);
     }
     // letreiro rolando na última linha
-    var msg = (P.media && track ? '♪ ' + track.title + ' — ' + track.artist
-      : mode === 'city' ? 'waiting for transmission...' : 'no incoming transmission...') +
-      (mode === 'city' ? '     •     NIGHT GRID ONLINE     •     RAIN ALERT: LIGHT     •     '
-        : '     •     ALL DECKS NOMINAL     •     HEADING 042 MARK 7     •     ');
+    var msg = info.msg;
     var span = COLS - 12, off = Math.floor(s * 6 * P.speed) % msg.length, rep = msg;
     while (rep.length < off + span) rep += msg;
     puts(ctx, rep.substr(off, span), 10, BOT, p.fg);
@@ -427,11 +469,292 @@
     }
   }
 
+  // ---------------------------------------------------------------- ASCII Data Center
+  // Corredor em perspectiva com um ponto de fuga (vpc, vpr). Para cada célula: sx = distância horizontal ao
+  // ponto de fuga e sy = distância vertical, normalizadas para 1 na borda próxima. sx >= sy é parede de racks;
+  // senão é teto ou piso; as duas abaixo de sg é a parede do fundo. 1/s é a profundidade: os racks são fatias
+  // de profundidade constante e as unidades dividem a altura de cada fatia.
+  function buildDC(c) {
+    var p = palette, dens = P.density, sc = { leds: [], fans: [], tags: [], racks: 0 };
+    var vpc = COLS / 2, vpr = Math.round(BOT * .47), topN = 8, botN = BOT - 1, sg = .075, q = .3, U = 14, maxRi = 0;
+    sc.vpc = vpc; sc.vpr = vpr; sc.topN = topN;
+    c.fillStyle = p.bg; c.fillRect(0, 0, W, H);
+    setFont(c);
+    for (var row = 0; row < BOT; row++) {
+      var sy = row < vpr ? (vpr - row - .5) / (vpr - topN) : (row + .5 - vpr) / (botN - vpr);
+      for (var col = 0; col < COLS; col++) {
+        var xo = (col + .5 - vpc) / vpc, sx = Math.abs(xo);
+        if (sx < sg && sy < sg) { c.fillStyle = rgba(p.wall, .95); c.fillRect(col * CW, row * CH, CW + .5, CH + .5); continue; }
+        if (sx >= sy) {
+          // parede de racks
+          var s = sx, zz = (1 / s - 1) / q, ri = Math.floor(zz), r = zz - ri, f = .2 + .8 * Math.pow(s, .7), side = xo < 0 ? 0 : 1;
+          var top = vpr - (vpr - topN) * s, bot = vpr + (botN - vpr) * s, v = (row + .5 - top) / (bot - top);
+          var rpu = (bot - top) / U, uf = v * U, ui = Math.floor(uf), sub = Math.floor((uf - ui) * rpu), kind = hash(ri * 2 + side, ui, 5);
+          if (ri > maxRi) maxRi = ri;
+          c.fillStyle = rgba(p.wall, .3 + .62 * s); c.fillRect(col * CW, row * CH, CW + .5, CH + .5);
+          if (r < .08 || r > .95) put(c, s > .3 ? '│' : '|', col, row, rgba(p.mid, .6 * f));
+          else if (v < .025 || v > .985) put(c, '─', col, row, rgba(p.mid, .55 * f));
+          else if (rpu >= 1.6 && sub === 0) put(c, '─', col, row, rgba(p.mid, .2 * f));
+          else if (kind > .88 - dens * .1) { /* unidade vazia */ }
+          else if (r < .2) {
+            put(c, '·', col, row, rgba(p.ok, .22 * f));
+            if (s > .16 && (rpu < 1.6 || sub === 1) && sc.leds.length < 650) sc.leds.push([col, row, f, kind]);
+          } else {
+            var g = kind < .45 ? ((col + row) & 1 ? ':' : '.') : kind < .7 ? '[=]'[col % 3] : (col & 1 ? '·' : ':');
+            if (kind < .45 && s > .45 && r > .76 && r < .86 && (rpu < 1.6 || sub === 1) && sc.fans.length < 30) { sc.fans.push([col, row, f]); continue; }
+            put(c, g, col, row, rgba(p.fg, (kind < .7 ? .3 : .22) * f));
+          }
+          continue;
+        }
+        var s2 = Math.min(sy, 1.4), zz2 = (1 / s2 - 1) / q, lx = xo / s2, f2 = .2 + .8 * Math.pow(Math.min(1, s2), .7), lf = zz2 - Math.floor(zz2);
+        if (row < vpr) {
+          // teto: luminárias e calhas de cabos (azul à esquerda, âmbar à direita)
+          if (sy <= 1 && lf < .1 && Math.abs(lx) < .34) {
+            // luminária: linha fina com um brilho suave embaixo (só dentro do corredor, não atrás do HUD)
+            c.fillStyle = rgba(p.light, .06 * f2); c.fillRect(col * CW, row * CH, CW + .5, CH * 1.4);
+            put(c, '=', col, row, rgba(p.light, .25 + .5 * f2));
+          } else if (Math.abs(Math.abs(lx) - .66) * vpc * s2 < .55) put(c, lx < 0 ? '\\' : '/', col, row, rgba(lx < 0 ? p.fg : p.warm, .55 * f2));
+          else if (lf < .04 * (1 + 1 / s2)) put(c, '·', col, row, rgba(p.mid, .15 * f2));
+        } else {
+          // piso elevado: placas em perspectiva, faixa amarela no meio do corredor e reflexo das luminárias
+          c.fillStyle = rgba(p.floor, .95); c.fillRect(col * CW, row * CH, CW + .5, CH + .5);
+          if (lf < .14 && Math.abs(lx) < .36) { c.fillStyle = rgba(p.light, .035 * f2); c.fillRect(col * CW, row * CH, CW + .5, CH + .5); }
+          var tx = lx * 4, tf = tx - Math.floor(tx), lw = .55 / Math.max(.3, vpc * s2 / 4), zf = zz2 * 2 - Math.floor(zz2 * 2);
+          var rpt = (botN - vpr) * s2 * s2 * q / 2;
+          if (Math.abs(lx) * vpc * s2 < .5) { if ((zz2 * 3) % 1 < .5) put(c, '¦', col, row, rgba(p.warm, .5 * f2)); }
+          else if (tf < lw || tf > 1 - lw) put(c, lx < 0 ? '/' : '\\', col, row, rgba(p.fg, .26 * f2));
+          else if (zf < Math.min(.5, .9 / Math.max(1, rpt))) put(c, '_', col, row, rgba(p.fg, .2 * f2));
+        }
+      }
+    }
+    sc.racks = (maxRi + 1) * 2;
+    // porta de saída no fundo do corredor
+    var dw = Math.max(1, Math.round(vpc * sg * .45)), dTop = Math.round(vpr - (vpr - topN) * sg * .7), dBot = Math.round(vpr + (botN - vpr) * sg) - 1;
+    c.fillStyle = rgba(p.ok, .16); c.fillRect((vpc - dw) * CW, dTop * CH, dw * 2 * CW, (dBot - dTop + 1) * CH);
+    for (var dr = dTop; dr <= dBot; dr++) { put(c, '│', vpc - dw - .5, dr, rgba(p.ok, .6)); put(c, '│', vpc + dw - .5, dr); }
+    puts(c, 'EXIT', vpc - 2, dTop - 1, rgba(p.ok, .85));
+    // ícones viram servidores numerados, com um LED de atividade no canto
+    icons.forEach(function (ic, i) {
+      var c0 = Math.floor((ic.x - 3) / CW), c1 = Math.ceil((ic.x + ic.w + 3) / CW) - 1;
+      var r0 = Math.floor((ic.y - 2) / CH), r1 = Math.ceil((ic.y + ic.h + 2) / CH) - 1, w = c1 - c0 + 1;
+      c.fillStyle = rgba(p.bg, .55); c.fillRect(c0 * CW, r0 * CH, w * CW, (r1 - r0 + 1) * CH);
+      var tag = 'SRV-' + String(i + 1).padStart(2, '0');
+      puts(c, '┌' + (tag + '─'.repeat(w)).slice(0, Math.max(0, w - 2)) + '┐', c0, r0, rgba(p.fg, .7));
+      for (var rr = r0 + 1; rr < r1; rr++) { put(c, '│', c0, rr); put(c, '│', c1, rr); }
+      puts(c, '└' + '─'.repeat(Math.max(0, w - 2)) + '┘', c0, r1);
+      sc.tags.push([c1 - 1, r1]);
+    });
+    return sc;
+  }
+  function dynDC(t, dt) {
+    var sc = scene, p = palette, s = t / 1000 * P.speed, i, act = clamp(.16 + stats.cpu / 100 * .8 + AU.level * .3, 0, 1);
+    var warn = stats.mem / 100 * .1, slot = Math.floor(s * 3), flash = AU.beat > .6;
+    setFont(ctx);
+    for (i = 0; i < sc.leds.length; i++) {
+      var L = sc.leds[i];
+      if (!flash && hash(slot + (i % 7), i, 9) > act) continue;
+      put(ctx, '•', L[0], L[1], rgba(hash(Math.floor(s * .3), i, 4) < warn ? p.warm : L[3] > .6 ? p.fg : p.ok, .35 + .65 * L[2]));
+    }
+    for (i = 0; i < sc.fans.length; i++) { var fn = sc.fans[i]; put(ctx, '|/-\\'[(Math.floor(s * 12) + i) % 4], fn[0], fn[1], rgba(p.mid, .4 + .5 * fn[2])); }
+    // pacotes correndo nas calhas do teto: a quantidade acompanha o tráfego de rede
+    var n = Math.round(4 + Math.min(18, (stats.rx + stats.tx) / 40000) + AU.level * 6);
+    for (i = 0; i < n; i++) {
+      var side = i & 1 ? 1 : -1, ph = (s * (.16 + hash(i, 1, 2) * .14) + hash(i, 2, 3)) % 1;
+      var sv = i % 3 === 0 ? .1 + ph * 1.1 : 1.2 - ph * 1.1;
+      var col = sc.vpc + side * .66 * sv * sc.vpc - .5, row = sc.vpr - (sc.vpr - sc.topN) * sv - .5;
+      if (row < 0) continue;
+      put(ctx, '•', col, row, rgba(side < 0 ? p.fg : p.warm, .3 + .7 * Math.min(1, sv)));
+    }
+    for (i = 0; i < sc.tags.length; i++) put(ctx, '●', sc.tags[i][0], sc.tags[i][1], hash(Math.floor(s * 4), i, 7) < act ? p.ok : rgba(p.ok, .2));
+  }
+
+  // ---------------------------------------------------------------- ASCII Dungeon
+  // Mapa visto de cima: os ícones viram salas (ícones encostados viram um salão), mais salas aleatórias,
+  // ligadas por corredores em L. Células: 0 rocha, 1 piso, 2 corredor, 3 parede, 4 porta, 5 água.
+  var WALK = [0, 1, 1, 0, 1, 0];
+  var WALLS = ['▪', '│', '│', '│', '─', '┘', '┐', '┤', '─', '└', '┌', '├', '─', '┴', '┬', '┼'];
+  function buildDG(c) {
+    var p = palette, dens = P.density, R = rng(seed + 23), i, j, x, y;
+    var G = new Uint8Array(COLS * BOT);
+    var at = function (x, y) { return x < 0 || y < 0 || x >= COLS || y >= BOT ? 0 : G[y * COLS + x]; };
+    var L = hudLayout(), res = [[L.title.col, L.title.row, L.title.col + L.title.w, L.title.row + L.title.h]];
+    if (L.tel) res.push([L.tel.col, L.tel.row, L.tel.col + L.tel.w, L.tel.row + L.tel.h]);
+    var hits = function (a, b, m) { return a.x0 - m <= b.x1 && b.x0 - m <= a.x1 && a.y0 - m <= b.y1 && b.y0 - m <= a.y1; };
+    var rooms = icons.map(function (ic) {
+      return { x0: Math.floor(ic.x / CW) - 2, y0: Math.floor(ic.y / CH) - 1, x1: Math.ceil((ic.x + ic.w) / CW) + 1, y1: Math.ceil((ic.y + ic.h) / CH), icon: true };
+    });
+    for (var merged = true; merged;) {
+      merged = false;
+      for (i = 0; i < rooms.length && !merged; i++) for (j = i + 1; j < rooms.length; j++) if (hits(rooms[i], rooms[j], 2)) {
+        var a = rooms[i], b = rooms[j];
+        a.x0 = Math.min(a.x0, b.x0); a.y0 = Math.min(a.y0, b.y0); a.x1 = Math.max(a.x1, b.x1); a.y1 = Math.max(a.y1, b.y1);
+        rooms.splice(j, 1); merged = true; break;
+      }
+    }
+    rooms.forEach(function (r) {
+      r.x0 = clamp(r.x0, 1, COLS - 4); r.x1 = clamp(r.x1, r.x0 + 2, COLS - 2);
+      r.y0 = clamp(r.y0, 1, BOT - 4); r.y1 = clamp(r.y1, r.y0 + 1, BOT - 2);
+    });
+    var want = rooms.length + Math.round(4 + dens * 12);
+    for (var tries = 0; rooms.length < want && tries < 600; tries++) {
+      var w = 6 + (R() * 14 | 0), h = 3 + (R() * 5 | 0), nr = { x0: 2 + (R() * (COLS - w - 4) | 0), y0: 2 + (R() * (BOT - h - 4) | 0) };
+      nr.x1 = nr.x0 + w; nr.y1 = nr.y0 + h;
+      var free = rooms.every(function (r) { return !hits(r, nr, 3); }) &&
+        res.every(function (q) { return !(q[0] - 2 <= nr.x1 && nr.x0 - 2 <= q[2] && q[1] - 2 <= nr.y1 && nr.y0 - 2 <= q[3]); });
+      if (free) rooms.push(nr);
+    }
+    rooms.forEach(function (r) {
+      for (y = r.y0; y <= r.y1; y++) for (x = r.x0; x <= r.x1; x++) G[y * COLS + x] = 1;
+      r.cx = (r.x0 + r.x1) >> 1; r.cy = (r.y0 + r.y1) >> 1;
+    });
+    var carve = function (a, b) {
+      var x = a.cx, y = a.cy;
+      var step = function (tx, ty) {
+        while (x !== tx || y !== ty) {
+          if (x !== tx) x += x < tx ? 1 : -1; else y += y < ty ? 1 : -1;
+          if (!G[y * COLS + x]) G[y * COLS + x] = 2;
+        }
+      };
+      if (R() < .5) { step(b.cx, y); step(b.cx, b.cy); } else { step(x, b.cy); step(b.cx, b.cy); }
+    };
+    var order = rooms.slice().sort(function (a, b) { return a.cx - b.cx; });
+    for (i = 1; i < order.length; i++) carve(order[i - 1], order[i]);
+    for (i = 0; i < Math.round(order.length * .35); i++) carve(order[R() * order.length | 0], order[R() * order.length | 0]);
+    // paredes em volta dos pisos; corredor que cruza a parede vira porta (ou abertura)
+    for (y = 0; y < BOT; y++) for (x = 0; x < COLS; x++) if (!G[y * COLS + x]) {
+      for (var dy = -1; dy <= 1; dy++) for (var dx = -1; dx <= 1; dx++) if (at(x + dx, y + dy) === 1) { G[y * COLS + x] = 3; dy = 2; break; }
+    }
+    // decide sobre uma cópia: senão um corredor convertido em piso "contamina" o vizinho e vira uma linha de piso
+    var G0 = G.slice(), at0 = function (x, y) { return x < 0 || y < 0 || x >= COLS || y >= BOT ? 0 : G0[y * COLS + x]; };
+    for (y = 0; y < BOT; y++) for (x = 0; x < COLS; x++) if (G0[y * COLS + x] === 2) {
+      if (at0(x - 1, y) !== 1 && at0(x + 1, y) !== 1 && at0(x, y - 1) !== 1 && at0(x, y + 1) !== 1) continue;
+      G[y * COLS + x] = (at0(x - 1, y) === 3 && at0(x + 1, y) === 3) || (at0(x, y - 1) === 3 && at0(x, y + 1) === 3) ? 4 : 1;
+    }
+    var sc = { G: G, rooms: rooms, torches: [], water: [], objs: {}, critters: [], gold: 0 };
+    // água, objetos e tochas
+    rooms.forEach(function (r, k) {
+      if (!r.icon && R() < .3) for (y = r.y0 + 1; y < r.y1; y++) for (x = r.x0 + 1; x < r.x1; x++) if (fbm(x * .25, y * .4) > .53) G[y * COLS + x] = 5;
+      var spot = function () { for (var n = 0; n < 20; n++) { var xx = r.x0 + (R() * (r.x1 - r.x0 + 1) | 0), yy = r.y0 + (R() * (r.y1 - r.y0 + 1) | 0); if (G[yy * COLS + xx] === 1) return yy * COLS + xx; } return -1; };
+      if (!r.icon) {
+        var k1;
+        if (R() < .45 && (k1 = spot()) >= 0) { sc.objs[k1] = ['$', p.warm]; sc.gold += 10 + (R() * 50 | 0); }
+        if (R() < .15 && (k1 = spot()) >= 0) sc.objs[k1] = ['^', p.hot];
+        if (R() < .12 && (k1 = spot()) >= 0) sc.objs[k1] = ['&', p.mid];
+      }
+      var nt = 1 + (R() < .5 ? 1 : 0);
+      for (i = 0; i < nt; i++) {
+        var tx = r.x0 + 1 + (R() * Math.max(1, r.x1 - r.x0 - 1) | 0), ty = i ? r.y1 + 1 : r.y0 - 1;
+        if (at(tx, ty) === 3) sc.torches.push([tx, ty]);
+      }
+    });
+    var nonIcon = rooms.filter(function (r) { return !r.icon; });
+    [['>', p.fg], ['<', p.fg]].forEach(function (st, k) {
+      var r = nonIcon[(k * 7 + 3) % Math.max(1, nonIcon.length)] || rooms[0];
+      if (r && G[r.cy * COLS + r.cx] === 1) sc.objs[r.cy * COLS + r.cx] = st;
+    });
+    // luz estática das tochas
+    var light = new Float32Array(COLS * BOT), asp = CW / CH;
+    for (y = 0; y < BOT; y++) for (x = 0; x < COLS; x++) {
+      var g = G[y * COLS + x]; if (!g || g === 3) continue;
+      var lt = .14;
+      for (i = 0; i < sc.torches.length; i++) {
+        var d = Math.hypot((x - sc.torches[i][0]) * asp, y - sc.torches[i][1]);
+        if (d < 9) lt += (1 - d / 9) * .75;
+      }
+      light[y * COLS + x] = Math.min(1, lt);
+    }
+    // desenho
+    c.fillStyle = p.bg; c.fillRect(0, 0, W, H);
+    sc.torches.forEach(function (tc) {
+      var cx = tc[0] * CW + CW / 2, cy = tc[1] * CH + CH / 2, gr = c.createRadialGradient(cx, cy, 0, cx, cy, CH * 7);
+      gr.addColorStop(0, rgba(p.hot, .2)); gr.addColorStop(1, rgba(p.hot, 0));
+      c.fillStyle = gr; c.fillRect(cx - CH * 7, cy - CH * 7, CH * 14, CH * 14);
+    });
+    setFont(c);
+    var wl = function (x, y) { var v = at(x, y); return v === 3 || v === 4; };
+    for (y = 0; y < BOT; y++) for (x = 0; x < COLS; x++) {
+      var k2 = y * COLS + x, v = G[k2], li = light[k2];
+      if (v === 0) { var hr = hash(x, y, 51); if (hr < .04) put(c, hr < .015 ? '`' : ',', x, y, rgba(p.wall, .14)); }
+      else if (v === 1) put(c, '.', x, y, rgba(p.floor, .1 + li * .75));
+      else if (v === 2) put(c, '#', x, y, rgba(p.corr, .28 + li * .5));
+      else if (v === 4) put(c, '+', x, y, rgba(p.warm, .55 + li * .4));
+      else if (v === 5) { put(c, '~', x, y, rgba(p.water, .3 + li * .5)); if (sc.water.length < 400) sc.water.push([x, y]); }
+      else {
+        var m = (wl(x, y - 1) ? 1 : 0) | (wl(x, y + 1) ? 2 : 0) | (wl(x - 1, y) ? 4 : 0) | (wl(x + 1, y) ? 8 : 0);
+        var near = Math.max(light[k2 - 1] || 0, light[k2 + 1] || 0, light[k2 - COLS] || 0, light[k2 + COLS] || 0);
+        put(c, WALLS[m], x, y, rgba(p.wall, .5 + near * .5));
+      }
+    }
+    Object.keys(sc.objs).forEach(function (k3) { var o = sc.objs[k3], ox = k3 % COLS, oy = (k3 / COLS) | 0; put(c, o[0], ox, oy, rgba(o[1], .5 + light[k3] * .5)); });
+    // aventureiro e bichinhos
+    var walkable = [];
+    for (i = 0; i < G.length; i++) if (G[i] === 1) walkable.push(i);
+    var pick = function () { return walkable.length ? walkable[R() * walkable.length | 0] : 0; };
+    var h0 = rooms.length ? rooms[0].cy * COLS + rooms[0].cx : pick();
+    if (G[h0] !== 1) h0 = pick();
+    sc.hero = { k: h0, path: [], i: 0, wait: 4, turn: 0, acc: 0 };
+    var nc = Math.round(2 + dens * 4);
+    for (i = 0; i < nc; i++) sc.critters.push({ k: pick(), ch: i % 2 ? 'r' : 'b', acc: 0 });
+    return sc;
+  }
+  function bfs(G, from, to) {
+    var N = G.length, prev = new Int32Array(N).fill(-1), q = new Int32Array(N), hd = 0, tl = 0;
+    prev[from] = from; q[tl++] = from;
+    while (hd < tl) {
+      var k = q[hd++]; if (k === to) break;
+      var x = k % COLS, nb = [x > 0 ? k - 1 : -1, x < COLS - 1 ? k + 1 : -1, k - COLS, k + COLS];
+      for (var n = 0; n < 4; n++) { var m = nb[n]; if (m >= 0 && m < N && prev[m] < 0 && WALK[G[m]]) { prev[m] = k; q[tl++] = m; } }
+    }
+    if (prev[to] < 0) return [];
+    var path = [];
+    for (var c2 = to; c2 !== from; c2 = prev[c2]) path.push(c2);
+    return path.reverse();
+  }
+  function dynDG(t, dt) {
+    var sc = scene, p = palette, s = t / 1000, G = sc.G, i;
+    setFont(ctx);
+    for (i = 0; i < sc.water.length; i++) if (hash(Math.floor(s * 2.5 * P.speed) + i % 5, i, 8) < .28) put(ctx, '≈', sc.water[i][0], sc.water[i][1], rgba(p.water, .8));
+    for (i = 0; i < sc.torches.length; i++) {
+      var tc = sc.torches[i], fl = clamp(.55 + .45 * vnoise(s * 6 * P.speed + i * 3.1, i) + AU.beat * .45, 0, 1);
+      ctx.fillStyle = rgba(p.hot, .12 * fl); ctx.fillRect((tc[0] - 1) * CW, (tc[1] - .5) * CH, 3 * CW, 2 * CH);
+      put(ctx, '*', tc[0], tc[1], rgba(fl > .8 ? p.warm : p.hot, .5 + fl * .5));
+    }
+    // o aventureiro anda até uma sala sorteada, para um pouco e escolhe outra
+    var h = sc.hero;
+    h.acc += dt * 6 * P.speed;
+    while (h.acc >= 1) {
+      h.acc -= 1;
+      if (h.wait > 0) { h.wait--; continue; }
+      if (h.i >= h.path.length) {
+        var r = sc.rooms[Math.random() * sc.rooms.length | 0];
+        h.path = r ? bfs(G, h.k, r.cy * COLS + r.cx) : []; h.i = 0; h.wait = 8;
+        continue;
+      }
+      h.k = h.path[h.i++]; h.turn++;
+    }
+    var hx = h.k % COLS, hy = (h.k / COLS) | 0, cx = hx * CW + CW / 2, cy = hy * CH + CH / 2;
+    var gr = ctx.createRadialGradient(cx, cy, 0, cx, cy, CH * 5);
+    gr.addColorStop(0, rgba(p.warm, .2)); gr.addColorStop(1, rgba(p.warm, 0));
+    ctx.fillStyle = gr; ctx.fillRect(cx - CH * 5, cy - CH * 5, CH * 10, CH * 10);
+    setFont(ctx, true); put(ctx, '@', hx, hy, p.fg); setFont(ctx);
+    sc.critters.forEach(function (cr, j) {
+      cr.acc += dt * (cr.ch === 'b' ? 4 : 1.6) * P.speed * (1 + AU.beat * 2);
+      while (cr.acc >= 1) {
+        cr.acc -= 1;
+        var dirs = [cr.k - 1, cr.k + 1, cr.k - COLS, cr.k + COLS], nk = dirs[Math.random() * 4 | 0];
+        if (nk >= 0 && nk < G.length && G[nk] === 1) cr.k = nk;
+      }
+      put(ctx, cr.ch, cr.k % COLS, (cr.k / COLS) | 0, rgba(cr.ch === 'b' ? p.mid : p.corr, .9));
+    });
+  }
+
   // ---------------------------------------------------------------- quadro
+  var BUILD = { city: buildCity, starship: buildStar, datacenter: buildDC, dungeon: buildDG };
+  var DYN = { city: dynCity, starship: dynStar, datacenter: dynDC, dungeon: dynDG };
   function build() {
     dirty = false;
     cctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    scene = mode === 'city' ? buildCity(cctx) : buildStar(cctx);
+    scene = BUILD[mode](cctx);
     buildHud(cctx);
   }
   function draw(now) {
@@ -440,7 +763,7 @@
     if (dirty || !scene) build();
     ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(cache, 0, 0);
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    if (mode === 'city') dynCity(now, dt); else dynStar(now, dt);
+    DYN[mode](now, dt);
     dynHud(now);
   }
   function stepAudio(now) {
@@ -492,7 +815,7 @@
     host.postMessage('ready'); if (P.telemetry) host.postMessage('stats|on');
   }
   window.__dbg = { P: P, bench: function () { var a = performance.now(); draw(a); return { frame: +(performance.now() - a).toFixed(2), canvas: cv.width + 'x' + cv.height, fps: +fps.toFixed(1) }; } };
-  window.asciiWorld = { applySettings: applySettings, setMode: function (v) { mode = v; dirty = true; } };
+  window.asciiWorld = { applySettings: applySettings };
   window.cv = cv; window.draw = draw;
   Object.defineProperties(window, {
     icons: { configurable: true, get: function () { return icons; }, set: function (v) { icons = v; dirty = true; } },

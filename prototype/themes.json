@@ -1017,6 +1017,144 @@
           ]
         }
       ]
+    },
+    {
+      "id": "ascii-datacenter",
+      "name": "ASCII 数据中心",
+      "desc": "桌面变成机房走廊：两侧机柜随 CPU 负载闪烁指示灯，网络流量化作线槽里奔跑的数据包，图标成为带编号的服务器",
+      "page": "ascii-datacenter.html",
+      "status": "ready",
+      "product": "free",
+      "thumb": "linear-gradient(90deg, transparent 49%, rgba(255,209,102,.75) 49.5% 50.5%, transparent 51%) 50% 100% / 100% 34% no-repeat, linear-gradient(rgba(232,246,255,.6), rgba(232,246,255,.6)) 50% 30% / 30% 2% no-repeat, linear-gradient(rgba(92,255,157,.25), rgba(92,255,157,.25)) 50% 50% / 8% 14% no-repeat, repeating-linear-gradient(0deg, rgba(92,255,157,.55) 0 2%, transparent 2% 9%) 4% 50% / 3% 70% no-repeat, repeating-linear-gradient(0deg, rgba(124,216,255,.55) 0 2%, transparent 2% 9%) 96% 50% / 3% 70% no-repeat, linear-gradient(#0c1828, #0c1828) 0 50% / 32% 84% no-repeat, linear-gradient(#0c1828, #0c1828) 100% 50% / 32% 84% no-repeat, linear-gradient(#03060b, #060d18)",
+      "groups": [
+        {
+          "name": "机房外观",
+          "params": [
+            {
+              "key": "palette",
+              "label": "机房灯光",
+              "hint": "机房的主色调",
+              "options": ["冷通道", "热通道", "绿灯机房"],
+              "default": 0
+            },
+            {
+              "key": "density",
+              "label": "设备密度",
+              "hint": "机柜里装满设备和指示灯的程度",
+              "min": 0,
+              "max": 1,
+              "step": 0.05,
+              "default": 0.72,
+              "format": "percent"
+            },
+            {
+              "key": "speed",
+              "label": "运转速度",
+              "hint": "风扇、指示灯和数据包的动画速度",
+              "min": 0.25,
+              "max": 3,
+              "step": 0.05,
+              "default": 1,
+              "format": "times"
+            }
+          ]
+        },
+        {
+          "name": "机房监控",
+          "params": [
+            {
+              "key": "audio",
+              "label": "音频负载",
+              "hint": "音量和节拍让指示灯一起闪烁、数据包加速",
+              "options": ["关闭", "开启"],
+              "default": 1
+            },
+            {
+              "key": "media",
+              "label": "日志播报",
+              "hint": "在底部系统日志里显示当前媒体标题和艺术家",
+              "options": ["隐藏", "显示"],
+              "default": 1
+            },
+            {
+              "key": "telemetry",
+              "label": "机柜监控",
+              "hint": "显示 CPU、内存、网络和显示器数量",
+              "options": ["隐藏", "显示"],
+              "default": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ascii-dungeon",
+      "name": "ASCII 地下城",
+      "desc": "桌面变成俯视的地下城地图：图标成为房间并由走廊相连，火把摇曳，冒险者 @ 在房间之间探索，CPU 和内存成为生命与法力",
+      "page": "ascii-dungeon.html",
+      "status": "ready",
+      "product": "free",
+      "thumb": "radial-gradient(circle at 24% 30%, rgba(255,122,47,.5), transparent 16%), radial-gradient(circle at 74% 64%, rgba(255,122,47,.45), transparent 16%), radial-gradient(circle at 30% 46%, #ffd36b 0 1.5%, transparent 2%), linear-gradient(#7d6f5a, #7d6f5a) 50% 47% / 26% 3% no-repeat, linear-gradient(#7d6f5a, #7d6f5a) 62% 60% / 3% 22% no-repeat, linear-gradient(rgba(216,195,154,.35), rgba(216,195,154,.35)) 22% 42% / 26% 36% no-repeat, linear-gradient(rgba(216,195,154,.35), rgba(216,195,154,.35)) 76% 72% / 22% 30% no-repeat, linear-gradient(#050403, #0d0a08)",
+      "groups": [
+        {
+          "name": "地城外观",
+          "params": [
+            {
+              "key": "palette",
+              "label": "地城风格",
+              "hint": "石墙和火光的主色调",
+              "options": ["火把石窟", "冰霜地窟", "苔藓遗迹"],
+              "default": 0
+            },
+            {
+              "key": "density",
+              "label": "房间数量",
+              "hint": "除图标房间外额外生成的房间和宝物数量",
+              "min": 0,
+              "max": 1,
+              "step": 0.05,
+              "default": 0.72,
+              "format": "percent"
+            },
+            {
+              "key": "speed",
+              "label": "探索速度",
+              "hint": "冒险者、火把和小怪物的移动速度",
+              "min": 0.25,
+              "max": 3,
+              "step": 0.05,
+              "default": 1,
+              "format": "times"
+            }
+          ]
+        },
+        {
+          "name": "冒险信息",
+          "params": [
+            {
+              "key": "audio",
+              "label": "音频火光",
+              "hint": "音量和节拍让火把跳动、小怪物受惊乱跑",
+              "options": ["关闭", "开启"],
+              "default": 1
+            },
+            {
+              "key": "media",
+              "label": "吟游诗人",
+              "hint": "在底部日志里把当前媒体播报成吟游诗人的歌",
+              "options": ["隐藏", "显示"],
+              "default": 1
+            },
+            {
+              "key": "telemetry",
+              "label": "角色状态",
+              "hint": "显示生命、法力、经验和显示器数量",
+              "options": ["隐藏", "显示"],
+              "default": 1
+            }
+          ]
+        }
+      ]
     }
   ]
 }
