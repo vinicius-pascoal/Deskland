@@ -26,7 +26,7 @@
     ide:       { name: 'ide',       glow: 'rgba(177, 101, 255, .48)', halo: 'rgba(71, 140, 255, .25)', radius: '6px',  parts: ['', 'Window.tsx ●'] },
     terminal:  { name: 'terminal',  glow: 'rgba(43, 220, 104, .45)',  halo: 'rgba(17, 104, 60, .25)',  radius: '4px',  parts: ['', '', '', '', '█', '1\n0\n1\n1\n0\n1'] },
     gitgraph:  { name: 'gitgraph',  glow: 'rgba(247, 120, 186, .43)', halo: 'rgba(88, 166, 255, .25)', radius: '7px',  parts: ['', 'HEAD → main'] },
-    ast:       { name: 'ast',       glow: 'rgba(217, 72, 15, .38)',   halo: 'rgba(200, 191, 172, .24)', radius: '7px', parts: [''] },
+    ast:       { name: 'ast',       glow: 'rgba(217, 72, 15, .38)',   halo: 'rgba(200, 191, 172, .24)', radius: '8px', parts: ['', ''] },
     dashboard: { name: 'dashboard', glow: 'rgba(87, 148, 242, .45)',  halo: 'rgba(115, 191, 105, .25)', radius: '7px', parts: ['', '', '', '', ''] },
     pond:      { name: 'pond',      glow: 'rgba(74, 196, 170, .43)',  halo: 'rgba(29, 102, 118, .27)', radius: '13px', parts: ['', ''] },
     nightcity: { name: 'nightcity', glow: 'rgba(255, 61, 127, .48)',  halo: 'rgba(61, 224, 255, .30)', radius: '5px',  parts: ['OPEN 24H', '', '', ''] },
@@ -226,12 +226,20 @@
     }
 
     /* ---------- Árvore sintática ---------- */
-    .fx-ast { box-shadow: 0 0 0 1px rgba(217,72,15,.22), 0 6px 16px rgba(120,80,40,.22), 0 0 10px 1px var(--fx-glow); }
-    .fx-ast::before { content: none; }
-    .fx-ast::after { top: 8%; bottom: 8%; left: -6px; width: 1.5px; background: rgba(140,105,75,.7); transform-origin: 50% 0; animation: dwfx-branch 3.6s ease-in-out infinite; }
+    /* A janela vira um nó da árvore do wallpaper: as cores vêm da paleta atual (--acc / --soft), o ponto de
+       parse desce pela curva que liga a janela ao nó acima (--path) e acende o título do bloco. */
+    .fx-ast { box-shadow: 0 0 0 1px var(--fx-halo), 0 6px 18px rgba(0,0,0,.12), 0 0 12px 2px var(--fx-glow); }
+    .fx-ast::before, .fx-ast::after { content: none; }
     .fx-ast > .p1 {
-      left: calc(50% - 3px); top: -37px; width: 6px; height: 6px; border-radius: 50%; background: #ff7a3d; box-shadow: 0 0 6px #ff7a3d;
-      animation: dwfx-astdown 2.4s ease-in infinite;
+      display: var(--dot, none); left: 0; top: 0; width: 6px; height: 6px; border-radius: 50%;
+      background: var(--acc); box-shadow: 0 0 0 4px var(--soft);
+      offset-path: var(--path); offset-anchor: center; offset-rotate: 0deg;
+      animation: dwfx-parse 5s ease-in-out infinite;
+    }
+    .fx-ast > .p2 {
+      left: calc(50% - var(--hw) / 2); top: -19px; width: var(--hw); height: 22px; box-sizing: border-box; border-radius: 11px;
+      border: 1.6px solid var(--acc); background: var(--soft); opacity: 0;
+      animation: dwfx-parsehi 5s ease-out infinite;
     }
 
     /* ---------- Dashboard ---------- */
@@ -380,8 +388,8 @@
     @keyframes dwfx-node { 0%,100% { transform: scale(.8); opacity: .45; } 50% { transform: scale(1.15); opacity: 1; } }
     @keyframes dwfx-data { from { transform: translateX(-8%); } to { transform: translateX(8%); } }
     @keyframes dwfx-down { 0% { transform: translateY(0); opacity: 0; } 8% { opacity: 1; } 92% { opacity: 1; } 100% { transform: translateY(calc(var(--h) * .88 - 6px)); opacity: 0; } }
-    @keyframes dwfx-branch { 0%,100% { transform: scaleY(.82); opacity: .25; } 50% { transform: scaleY(1); opacity: .7; } }
-    @keyframes dwfx-astdown { 0% { transform: translateY(0); opacity: 0; } 15%,80% { opacity: 1; } 100% { transform: translateY(34px); opacity: 0; } }
+    @keyframes dwfx-parse { 0% { offset-distance: 0%; opacity: 0; } 5% { opacity: 1; } 38% { offset-distance: 100%; opacity: 1; } 44%, 100% { offset-distance: 100%; opacity: 0; } }
+    @keyframes dwfx-parsehi { 0%, 36% { opacity: 0; } 42% { opacity: 1; } 75%, 100% { opacity: 0; } }
     @keyframes dwfx-glowtext { 0%,100% { opacity: .55; } 50% { opacity: 1; } }
     @keyframes dwfx-needle { from { transform: rotate(-70deg); } to { transform: rotate(45deg); } }
     @keyframes dwfx-bar { from { transform: scaleY(.25); } to { transform: scaleY(1); } }
@@ -686,18 +694,54 @@
       if (w > 140) label(c, x + w - 30, y - 11, 'v0.1.3', 'rgba(88,166,255,.18)', '#58a6ff', '#9ecbff');
     },
 
-    ast(c, x, y, w, h, R) {
-      const cx = x + w / 2, rootY = y - 44;
-      c.strokeStyle = 'rgba(150,105,70,.75)'; c.lineWidth = 1;
-      const kids = w > 200 ? [[x + w * .2, 'Import'], [cx, 'Function'], [x + w * .8, 'Export']] : [[cx, 'Function']];
-      c.beginPath();
-      kids.forEach(([kx]) => { c.moveTo(cx, rootY + 7); c.lineTo(cx, rootY + 13); c.lineTo(kx, rootY + 13); c.lineTo(kx, y - 27); c.moveTo(kx, y - 13); c.lineTo(kx, y); });
-      const leaves = w > 160 ? [[x + w * .3, 'Ident'], [x + w * .7, 'Literal']] : [];
-      leaves.forEach(([lx]) => { c.moveTo(lx, y + h); c.lineTo(lx, y + h + 9); });
-      c.stroke();
-      label(c, cx, rootY, 'Program', '#fff1e2', 'rgba(180,71,26,.85)', '#a63d14');
-      kids.forEach(([kx, t]) => label(c, kx, y - 20, t, '#fff7ec', 'rgba(180,71,26,.7)', '#b4471a'));
-      leaves.forEach(([lx, t]) => label(c, lx, y + h + 16, t, '#f6efe6', 'rgba(150,105,70,.7)', '#8a5a3a'));
+    // A janela vira um bloco da árvore do wallpaper (mesmo desenho dos blocos de ícones do ast.html):
+    // moldura tracejada, título "Block nome" no meio da borda de cima, "}" na de baixo, e uma curva até o
+    // nó mais próximo acima na árvore real. Fora do ast.html (sem o gancho) usa a paleta "papel".
+    ast(c, x, y, w, h, R, hook) {
+      const pal = hook && hook.pal || { bg: '#f6f3ec', edge: '#c8bfac', node: '#fffdf8', nodeEdge: '#d6ccb8', text: '#3b3630',
+        muted: '#9a907e', val: '#b4532a', accent: '#d9480f', soft: 'rgba(217,72,15,0.14)' };
+      const NH = 22, f = { x: x - 8, y: y - 8, w: w + 16, h: h + 16 }, hx = x + w / 2, hy = f.y, vars = {};
+      const words = ['frame', 'view', 'panel', 'layout', 'render', 'scene', 'state', 'window', 'pane', 'modal'];
+      const curve = (x0, y0, x1, y1) => {
+        const dy = y1 - y0;
+        c.beginPath(); c.moveTo(x0, y0); c.bezierCurveTo(x0, y0 + dy * .55, x1, y1 - dy * .55, x1, y1);
+        c.strokeStyle = pal.edge; c.lineWidth = 1.3; c.lineCap = 'round'; c.stroke();
+        return `M ${x0 - x} ${y0 - y} C ${x0 - x} ${y0 + dy * .55 - y}, ${x1 - x} ${y1 - dy * .55 - y}, ${x1 - x} ${y1 - y}`;
+      };
+      const pill = (cx, cy, type, val) => {
+        c.font = `11px ${MONO}`; c.textAlign = 'left'; c.textBaseline = 'middle';
+        const tw = c.measureText(type).width, vw = val ? c.measureText(' ' + val).width : 0, pw = Math.ceil(tw + vw + 18);
+        rr(c, cx - pw / 2, cy - NH / 2, pw, NH, NH / 2); c.fillStyle = pal.node; c.fill();
+        c.lineWidth = 1; c.strokeStyle = pal.nodeEdge; c.stroke();
+        c.fillStyle = pal.text; c.fillText(type, cx - pw / 2 + 9, cy + .5);
+        if (val) { c.fillStyle = pal.val; c.fillText(' ' + val, cx - pw / 2 + 9 + tw, cy + .5); }
+        return pw;
+      };
+      // curva até o nó mais próximo acima (o título de um bloco também serve); escondido sob a janela não vale
+      let par = null, best = 1e9;
+      for (const n of (hook && hook.nodes) || []) {
+        if (n.ic || n.w == null || n.y + NH / 2 > hy - NH / 2 - 10) continue;
+        if (n.x > x && n.x < x + w && n.y > y && n.y < y + h) continue;
+        const cost = Math.abs(n.x - hx) + .6 * (hy - n.y);
+        if (cost < best) { best = cost; par = n; }
+      }
+      if (par) { vars['--path'] = `path('${curve(par.x, par.y + NH / 2, hx, hy - NH / 2)}')`; vars['--dot'] = 'block'; }
+      // moldura tracejada do bloco
+      rr(c, f.x, f.y, f.w, f.h, 14); c.setLineDash([6, 5]); c.strokeStyle = pal.edge; c.lineWidth = 1.3; c.stroke(); c.setLineDash([]);
+      // folhas embaixo, se houver espaço
+      const bottom = f.y + f.h;
+      if (w > 220 && bottom + 60 < innerHeight - 40) {
+        [[x + w * .3, 'Identifier', words[(R() * words.length) | 0]], [x + w * .7, 'Return', '']].forEach(([lx, t, v]) => {
+          curve(hx, bottom + 8, lx, bottom + 40 - NH / 2); pill(lx, bottom + 40, t, v);
+        });
+      }
+      // "}" na borda de baixo e o título na de cima
+      c.font = `11px ${MONO}`; c.textAlign = 'center'; c.textBaseline = 'middle';
+      rr(c, hx - 9, bottom - 8, 18, 16, 6); c.fillStyle = pal.bg; c.fill();
+      c.fillStyle = pal.muted; c.fillText('}', hx, bottom + .5);
+      const hw = pill(hx, hy, 'Block', words[(R() * words.length) | 0]);
+      vars['--hw'] = hw + 'px'; vars['--acc'] = pal.accent; vars['--soft'] = pal.soft;
+      return vars;
     },
 
     dashboard(c, x, y, w, h, R) {
@@ -917,8 +961,11 @@
     if (layer.hidden) { artCanvas.width = artCanvas.height = 0; return; }
     const k = Math.max(1, window.devicePixelRatio || 1);
     layer.style.opacity = String(api.intensity);
-    layer.style.setProperty('--fx-glow', activeProfile.glow);
-    layer.style.setProperty('--fx-halo', activeProfile.halo);
+    // O tema pode oferecer um gancho (window.DesklandFxHook) com cores da paleta atual e dados da cena.
+    let hook = null;
+    try { hook = typeof window.DesklandFxHook === 'function' ? window.DesklandFxHook() : null; } catch (e) { hook = null; }
+    layer.style.setProperty('--fx-glow', hook && hook.glow || activeProfile.glow);
+    layer.style.setProperty('--fx-halo', hook && hook.halo || activeProfile.halo);
     layer.style.setProperty('--fx-radius', activeProfile.radius);
     // Canvas da ilustração: tamanho em pixels reais, exibido no tamanho CSS (pode ser fracionário).
     const dpr = window.devicePixelRatio || 1, cssW = innerWidth, cssH = innerHeight;
@@ -945,7 +992,7 @@
       const [x, y, w, h] = shown[i];
       if (!draw) continue;
       ctx.save();
-      try { vars[i] = draw(ctx, x, y, w, h, seeded((Math.round(w) * 73856093) ^ (Math.round(h) * 19349663))) || null; }
+      try { vars[i] = draw(ctx, x, y, w, h, seeded((Math.round(w) * 73856093) ^ (Math.round(h) * 19349663)), hook) || null; }
       catch (e) { /* uma ilustração com erro não pode derrubar o wallpaper */ }
       ctx.restore();
     }

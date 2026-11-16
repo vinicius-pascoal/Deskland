@@ -76,10 +76,11 @@ const QS = new URLSearchParams(location.search);
 const WALL = QS.has('wallpaper');
 const PREVIEW = QS.has('preview');
 const STILL = QS.has('still');
-const P = { palette: 0, density: 0.6, values: 1, speed: 1, strip: 1 };
+const P = { palette: 0, density: 0.6, values: 1, groups: 1, speed: 1, strip: 1 };
 const DEFAULTS = Object.assign({}, P);
-const LIMITS = { palette: [0, 2], density: [0, 1], values: [0, 1], speed: [0.25, 3], strip: [0, 1] };
-const INTS = new Set(['palette', 'values', 'strip']);
+const LIMITS = { palette: [0, 2], density: [0, 1], values: [0, 1], groups: [0, 1], speed: [0.25, 3], strip: [0, 1] };
+const INTS = new Set(['palette', 'values', 'groups', 'strip']);
+const GROUP_GAP = 30;   // 两个图标之间的空隙小于这个（像素）就算同一组；隔一个空格子的不算
 
 const cv = document.getElementById('art');
 const ctx = cv.getContext('2d', { alpha: false });
@@ -131,10 +132,20 @@ const GRAMMAR = {
   VarDecl: ['Declarator'], Declarator: ['Identifier', '$expr'], ExprStmt: ['Call'], Call: ['Member', '$expr'],
   Member: ['Identifier', 'Identifier'], If: ['Binary', 'Block'], Binary: ['Identifier', 'Literal'], Return: ['$expr'],
   Import: ['Specifier', 'Literal'], Specifier: ['Identifier'], ForOf: ['Identifier', 'Identifier', 'Block'], Arrow: ['Params', 'Binary'],
+  ClassDecl: ['Identifier', 'Method'], Method: ['Params', 'Block'], Property: ['Identifier', '$expr'], ArrayExpr: ['$expr', '$expr'],
   Identifier: [], Literal: [],
 };
 const KEYWORD = { FuncDecl: 'function', VarDecl: 'const', ExprStmt: ';', If: 'if', Return: 'return', Import: 'import', ForOf: 'for',
-  Params: '(', Block: '{', Declarator: '=', Call: '(', Member: '.', Binary: '*', Specifier: '{', Arrow: '=>', Program: '', Module: '' };
+  Params: '(', Block: '{', Declarator: '=', Call: '(', Member: '.', Binary: '*', Specifier: '{', Arrow: '=>', Program: '', Module: '',
+  ClassDecl: 'class', Method: '(', Property: ':', ArrayExpr: '[' };
+// 分组的形状决定它是哪种代码块：一列 → 函数（从上往下的语句），一行 → 数组（元素），成片 → 类（方法和属性）
+const groupType = (cols, rows) => rows === 1 ? 'ArrayExpr' : cols === 1 ? 'FuncDecl' : 'ClassDecl';
+const CLOSER = { ArrayExpr: ']', FuncDecl: '}', ClassDecl: '}' };
+function memberType(type, rng) {
+  if (type === 'ClassDecl') return rng() < 0.6 ? 'Method' : 'Property';
+  if (type === 'ArrayExpr') return EXPRS[Math.floor(rng() * EXPRS.length)];
+  return STMTS[Math.floor(rng() * STMTS.length)];
+}
 const WORDS = ['icon', 'layout', 'desk', 'grid', 'shore', 'cloud', 'frame', 'cache', 'pixel', 'scale', 'seed', 'wave', 'tile', 'sprite', 'layer',
   'noise', 'state', 'theme', 'light', 'shadow', 'cursor', 'screen', 'node', 'token', 'parse', 'emit', 'scope', 'visit'];
 const isLeaf = t => !GRAMMAR[t] || GRAMMAR[t].length === 0 && t !== 'Program' && t !== 'Module';
@@ -143,7 +154,7 @@ function kidTypes(type, rng) {
   return (GRAMMAR[type] || []).map(t => t === '$stmt' ? STMTS[Math.floor(rng() * STMTS.length)] : t === '$expr' ? EXPRS[Math.floor(rng() * EXPRS.length)] : t);
 }
 function valueOf(type, rng) {
-  if (type === 'Identifier') return WORDS[Math.floor(rng() * WORDS.length)];
+  if (type === 'Identifier' || type === 'Method' || type === 'Property') return WORDS[Math.floor(rng() * WORDS.length)];
   if (type === 'Literal') return rng() < 0.5 ? String(Math.floor(rng() * 100)) : `"${WORDS[Math.floor(rng() * WORDS.length)]}"`;
   return '';
 }
@@ -156,10 +167,26 @@ const mctx = document.createElement('canvas').getContext('2d');
 function pillSize(n) {
   mctx.font = `11px ${MONO}`;
   const tw = mctx.measureText(n.type).width, vw = P.values && n.val ? mctx.measureText(' ' + n.val).width : 0;
-  n.w = Math.ceil(tw + vw + 18); n.h = NODE_H;
+  const cw = n.count ? mctx.measureText(' ×' + n.count).width : 0;
+  n.w = Math.ceil(tw + vw + cw + 18); n.h = NODE_H;
 }
-// 图标节点的框：左右往里收一点（同一排相邻图标的框不重叠），上下放一点
-const rectOf = n => n.ic ? { x: n.ic.x + 3, y: n.ic.y - 3, w: n.ic.w - 6, h: n.ic.h + 6 } : { x: n.x - n.w / 2, y: n.y - n.h / 2, w: n.w, h: n.h };
+// 图标节点的框：左右往里收一点（同一排相邻图标的框不重叠），上下放一点；
+// 分组节点：整个分组的框，再往上包住压在上边框中间的标题（树枝从标题上方进来、从框底下出去）
+const rectOf = n => n.ic ? { x: n.ic.x + 3, y: n.ic.y - 3, w: n.ic.w - 6, h: n.ic.h + 6 }
+  : n.frame ? { x: n.frame.x, y: n.frame.y - NODE_H / 2, w: n.frame.w, h: n.frame.h + NODE_H / 2 }
+  : { x: n.x - n.w / 2, y: n.y - n.h / 2, w: n.w, h: n.h };
+const pillRect = n => ({ x: n.x - n.w / 2, y: n.y - n.h / 2, w: n.w, h: n.h });
+// 图标分组：两个图标的空隙小于 GROUP_GAP 就连起来（并查集），一组至少两个图标
+function iconGroups() {
+  const parent = icons.map((_, i) => i), find = i => parent[i] === i ? i : (parent[i] = find(parent[i]));
+  if (P.groups) for (let i = 0; i < icons.length; i++) for (let j = i + 1; j < icons.length; j++)
+    if (hit(icons[i], icons[j], GROUP_GAP)) parent[find(i)] = find(j);
+  const map = new Map();
+  icons.forEach((ic, i) => { const r = find(i); if (!map.has(r)) map.set(r, []); map.get(r).push(ic); });
+  return [...map.values()];
+}
+// 按中心坐标数有几列、几行（相差不到 20px 算同一列 / 行）
+function lanes(vals) { const s = vals.slice().sort((a, b) => a - b); let n = 0, last = -1e9; for (const v of s) { if (v - last > 20) n++; last = v; } return n; }
 const hit = (a, b, pad) => a.x - pad < b.x + b.w && a.x + a.w + pad > b.x && a.y - pad < b.y + b.h && a.y + a.h + pad > b.y;
 function plan() {
   const rng = mulberry32((seed ^ 0xa57) + monSalt()), nodes = [], tags = [];
@@ -172,44 +199,76 @@ function plan() {
   root.y = multi() ? 110 : 34;
   for (const f of [0.5, 0.42, 0.58, 0.34, 0.66, 0.26, 0.74]) { root.x = W * f; if (!blocked(rectOf(root), 8)) break; }
   nodes.push(root);
-  // 图标：按从上到下的顺序，找上方最近的节点当父节点（根总是候选）；孩子多的父节点稍微减分，让树分叉
-  const ins = icons.map(ic => ({ ic, x: ic.x + ic.w / 2, y: ic.y + ic.h / 2, kids: [], syn: 0 })).sort((a, b) => a.y - b.y || a.x - b.x);
-  for (const n of ins) {
-    let best = root, bc = Math.abs(n.x - root.x) + 0.5 * Math.abs(n.y - root.y) + 30 * root.kids.length + 120;
+  // 单位：单独的图标，或者一组图标（画成一个代码块：虚线框 + 压在上边框中间的标题，组员不再一个个连树枝）
+  const ins = icons.map(ic => ({ ic, x: ic.x + ic.w / 2, y: ic.y + ic.h / 2, kids: [], syn: 0 }));
+  const nodeOf = new Map(ins.map(n => [n.ic, n]));
+  const units = [];
+  for (const g of iconGroups()) {
+    if (g.length === 1) { units.push(nodeOf.get(g[0])); continue; }
+    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+    for (const ic of g) { x0 = Math.min(x0, ic.x); y0 = Math.min(y0, ic.y); x1 = Math.max(x1, ic.x + ic.w); y1 = Math.max(y1, ic.y + ic.h); }
+    const frame = { x: x0 - 10, y: y0 - 16, w: x1 - x0 + 20, h: y1 - y0 + 26 };
+    const members = g.map(ic => nodeOf.get(ic)).sort((a, b) => a.ic.y - b.ic.y || a.ic.x - b.ic.x);
+    const gn = { frame, members, kids: [], syn: 0, x: frame.x + frame.w / 2, y: frame.y, count: g.length,
+      type: groupType(lanes(g.map(ic => ic.x + ic.w / 2)), lanes(g.map(ic => ic.y + ic.h / 2))) };
+    gn.val = valueOf('Identifier', rng); pillSize(gn);
+    if (frame.y < 2) { frame.h -= 2 - frame.y; frame.y = 2; }
+    // 分组贴着屏幕顶、上方放不下标题：标题挪到框外的右上角（右边放不下就左边），用一小段线连到框上
+    if (frame.y - NODE_H / 2 < 4) {
+      gn.side = true; gn.y = frame.y + NODE_H / 2 - 1;
+      gn.x = frame.x + frame.w + 12 + gn.w / 2;
+      if (gn.x + gn.w / 2 > W - 6) gn.x = frame.x - 12 - gn.w / 2;
+      tags.push(pillRect(gn));
+    }
+    for (const m of members) { m.member = gn; m.parent = gn; gn.kids.push(m); }
+    units.push(gn);
+  }
+  // 按从上到下的顺序，给每个单位找上方最近的单位当父节点（根总是候选）；孩子多的父节点稍微减分，让树分叉
+  const topOf = u => u.frame ? u.frame.y - NODE_H / 2 : u.ic.y;
+  const bottomOf = u => u.frame ? u.frame.y + u.frame.h : u.ic.y + u.ic.h;
+  const ownKids = u => u.frame ? u.kids.length - u.members.length : u.kids.length;
+  units.sort((a, b) => topOf(a) - topOf(b) || a.x - b.x);
+  for (const n of units) {
+    let best = root, bc = Math.abs(n.x - root.x) + 0.5 * Math.abs(topOf(n) - root.y) + 30 * root.kids.length + 120;
     for (const m of nodes) {
-      if (!m.ic || m.ic.y + m.ic.h > n.ic.y + 4) continue;
-      const c = Math.abs(n.x - m.x) + 0.5 * (n.y - m.y) + 30 * m.kids.length;
+      if (!(m.ic || m.frame) || m.member || bottomOf(m) > topOf(n) + 4) continue;
+      const c = Math.abs(n.x - m.x) + 0.5 * (topOf(n) - bottomOf(m)) + 30 * ownKids(m);
       if (c < bc) { bc = c; best = m; }
     }
     n.parent = best; best.kids.push(n); n.depth = best.depth + 1;
     nodes.push(n);
+    if (n.frame) for (const m of n.members) { m.depth = n.depth + 1; nodes.push(m); }
   }
-  // 从上往下给图标定类型：父节点的语法里挑；自己还有孩子的就挑不是叶子的类型
+  // 从上往下定类型：组员按代码块的种类挑；其余从父节点的语法里挑，自己还有孩子的就挑不是叶子的类型
   const assign = (m) => {
     const opts = kidTypes(m.type, rng);
     m.kids.forEach((k, i) => {
-      let t = opts.length ? opts[i % opts.length] : 'Block';
-      if (k.kids.length && isLeaf(t)) t = opts.find(o => !isLeaf(o)) || (m.type === 'Program' || m.type === 'Module' ? 'FuncDecl' : 'Block');
-      k.type = t; k.val = valueOf(t, rng);
+      if (!k.frame) {
+        let t = k.member ? memberType(m.type, rng) : opts.length ? opts[i % opts.length] : 'Block';
+        if (k.kids.length && isLeaf(t)) t = opts.find(o => !isLeaf(o)) || (m.type === 'Program' || m.type === 'Module' ? 'FuncDecl' : 'Block');
+        k.type = t; k.val = valueOf(t, rng);
+      }
       assign(k);
     });
   };
   assign(root);
-  // 图标的类型标签：放在图标右边（空着的话），否则左边；都不行才压在框的上边
+  // 类型标签：单独的图标放在图标右边（空着的话），否则左边，都不行才压在框的上边；
+  // 组员的标签排在分组框的右边（或左边），每排一个，对齐成一列；放不下就不放
   mctx.font = `10px ${MONO}`;
   for (const n of ins) {
     const tw = mctx.measureText(n.type).width + 12, r = rectOf(n), cy = n.ic.y + Math.min(28, n.ic.h * 0.35);
+    const f = n.member && n.member.frame;
     let pos = null;
-    for (const x of [r.x + r.w + 6, r.x - 6 - tw]) {
+    for (const x of f ? [f.x + f.w + 6, f.x - 6 - tw] : [r.x + r.w + 6, r.x - 6 - tw]) {
       const q = { x, y: cy - 8, w: tw, h: 16 };
       if (!blocked(q, 3)) { pos = q; break; }
     }
-    n.tag = pos || { x: r.x + r.w / 2 - tw / 2, y: Math.max(1, r.y - 8), w: tw, h: 16 };
+    n.tag = pos || (f ? null : { x: r.x + r.w / 2 - tw / 2, y: Math.max(1, r.y - 8), w: tw, h: 16 });
     if (pos) tags.push(pos);
   }
-  // 空地上按语法长出小节点（广度优先：上层先占位置）
+  // 空地上按语法长出小节点（广度优先：上层先占位置）；分组是完整的代码块，不再往外长
   const maxSyn = Math.round(1 + P.density * 3), budget = Math.round(20 + P.density * 110);
-  const queue = [root, ...ins];
+  const queue = [root, ...units.filter(u => !u.frame)];
   let made = 0;
   while (queue.length && made < budget) {
     const m = queue.shift();
@@ -243,8 +302,8 @@ function plan() {
   }
   // 树枝的几何（贝塞尔曲线）：父节点底边 → 子节点顶边；子节点不在下方时从侧边连
   for (const n of nodes) {
-    if (!n.parent) continue;
-    const a = rectOf(n.parent), b = rectOf(n);
+    if (!n.parent || n.member) continue;                   // 组员靠分组框表示从属，不画树枝
+    const a = rectOf(n.parent), b = n.frame ? pillRect(n) : rectOf(n);   // 进分组的树枝接到标题上
     if (b.y > a.y + a.h + 6) {
       const x0 = a.x + a.w / 2, y0 = a.y + a.h, x1 = b.x + b.w / 2, y1 = b.y, dy = y1 - y0;
       n.edge = [x0, y0, x0, y0 + dy * 0.55, x1, y1 - dy * 0.55, x1, y1];
@@ -254,9 +313,10 @@ function plan() {
       n.edge = [x0, y0, x0 + dx * 0.5, y0, x1 - dx * 0.5, y1, x1, y1];
     }
   }
-  // 先序遍历（孩子按横坐标从左到右）
+  // 先序遍历（孩子按横坐标从左到右；分组里先按阅读顺序走完组员，再走挂在分组下面的）
   const order = [];
-  const walk = n => { order.push(n); n.kids.slice().sort((p, q) => p.x - q.x).forEach(walk); };
+  const byOrder = (p, q) => p.member && q.member ? p.ic.y - q.ic.y || p.ic.x - q.ic.x : p.member ? -1 : q.member ? 1 : p.x - q.x;
+  const walk = n => { order.push(n); n.kids.slice().sort(byOrder).forEach(walk); };
   walk(root);
   order.forEach((n, i) => n.i = i);
   // 源码条：每个节点对应一个词
@@ -271,21 +331,44 @@ const bez = (e, u) => { const v = 1 - u; return [v * v * v * e[0] + 3 * v * v * 
    画节点
    ====================================================================== */
 function drawPill(c, n, pal, hi) {
-  const r = rectOf(n);
+  const r = n.frame ? pillRect(n) : rectOf(n);
   c.fillStyle = pal.node; c.beginPath(); c.roundRect(r.x, r.y, r.w, r.h, r.h / 2); c.fill();
   if (hi > 0) { c.fillStyle = pal.soft; c.globalAlpha = hi; c.fill(); c.globalAlpha = 1; }
   c.strokeStyle = hi > 0 ? pal.accent : pal.nodeEdge; c.lineWidth = hi > 0 ? 1.2 + 0.6 * hi : 1; c.stroke();
-  c.font = `11px ${MONO}`; c.textBaseline = 'middle'; c.textAlign = 'left';
-  c.fillStyle = hi > 0.5 ? pal.accent : pal.text; c.fillText(n.type, r.x + 9, r.y + r.h / 2 + 0.5);
-  if (P.values && n.val) { mctx.font = c.font; c.fillStyle = pal.val; c.fillText(' ' + n.val, r.x + 9 + mctx.measureText(n.type).width, r.y + r.h / 2 + 0.5); }
+  c.font = `11px ${MONO}`; c.textBaseline = 'middle'; c.textAlign = 'left'; mctx.font = c.font;
+  let x = r.x + 9;
+  c.fillStyle = hi > 0.5 ? pal.accent : pal.text; c.fillText(n.type, x, r.y + r.h / 2 + 0.5); x += mctx.measureText(n.type).width;
+  if (P.values && n.val) { c.fillStyle = pal.val; c.fillText(' ' + n.val, x, r.y + r.h / 2 + 0.5); x += mctx.measureText(' ' + n.val).width; }
+  if (n.count) { c.fillStyle = pal.muted; c.fillText(' ×' + n.count, x, r.y + r.h / 2 + 0.5); }
+}
+// 分组：淡色底 + 虚线框，左边一条缩进参考线，标题压在上边框中间，结尾的括号压在下边框
+function drawGroup(c, n, pal, hi) {
+  const f = n.frame;
+  c.beginPath(); c.roundRect(f.x, f.y, f.w, f.h, 14);
+  c.fillStyle = hi > 0 ? pal.soft : pal.frame; c.globalAlpha = hi > 0 ? 0.25 + 0.5 * hi : 0.32; c.fill(); c.globalAlpha = 1;
+  c.setLineDash([6, 5]); c.strokeStyle = hi > 0 ? pal.accent : pal.edge; c.lineWidth = hi > 0 ? 1.3 + hi : 1.3; c.stroke(); c.setLineDash([]);
+  c.strokeStyle = hi > 0 ? pal.accent : pal.edge; c.globalAlpha = 0.55; c.lineWidth = 1;
+  c.beginPath(); c.moveTo(f.x + 5, f.y + NODE_H / 2 + 4); c.lineTo(f.x + 5, f.y + f.h - 12); c.stroke(); c.globalAlpha = 1;
+  const close = CLOSER[n.type] || '}';
+  c.font = `11px ${MONO}`; c.textBaseline = 'middle'; c.textAlign = 'center';
+  c.fillStyle = pal.bg; c.beginPath(); c.roundRect(f.x + f.w / 2 - 9, f.y + f.h - 8, 18, 16, 6); c.fill();
+  c.fillStyle = hi > 0.5 ? pal.accent : pal.muted; c.fillText(close, f.x + f.w / 2, f.y + f.h + 0.5);
+  c.textAlign = 'left';
+  if (n.side) {                                             // 标题在框外：一小段线连到框边
+    const pr = pillRect(n), right = pr.x > f.x;
+    c.strokeStyle = hi > 0 ? pal.accent : pal.edge; c.lineWidth = 1.2;
+    c.beginPath(); c.moveTo(right ? f.x + f.w : f.x, n.y); c.lineTo(right ? pr.x : pr.x + pr.w, n.y); c.stroke();
+  }
+  drawPill(c, n, pal, hi);
 }
 function drawIconNode(c, n, pal, hi) {
   const r = rectOf(n);
   c.strokeStyle = hi > 0 ? pal.accent : pal.frame; c.lineWidth = hi > 0 ? 1.4 + hi : 1.2;
   c.beginPath(); c.roundRect(r.x, r.y, r.w, r.h, 10); c.stroke();
   if (hi > 0) { c.fillStyle = pal.soft; c.globalAlpha = hi; c.fill(); c.globalAlpha = 1; }
-  // 类型标签（位置在 plan() 里选好）
+  // 类型标签（位置在 plan() 里选好；分组里放不下的组员没有标签）
   const t = n.tag;
+  if (!t) return;
   c.font = `10px ${MONO}`; c.textBaseline = 'middle'; c.textAlign = 'center';
   c.fillStyle = pal.bg; c.beginPath(); c.roundRect(t.x, t.y, t.w, t.h, 8); c.fill();
   c.strokeStyle = hi > 0 ? pal.accent : pal.nodeEdge; c.lineWidth = 1; c.stroke();
@@ -335,7 +418,8 @@ function renderCache(dst, full) {
   if (full) {
     c.strokeStyle = pal.edge; c.lineWidth = 1.3;
     for (const n of T.nodes) if (n.edge) { const e = n.edge; c.beginPath(); c.moveTo(e[0], e[1]); c.bezierCurveTo(e[2], e[3], e[4], e[5], e[6], e[7]); c.stroke(); }
-    for (const n of T.nodes) (n.ic ? drawIconNode : drawPill)(c, n, pal, 0);
+    for (const n of T.nodes) if (n.frame) drawGroup(c, n, pal, 0);          // 分组框垫在最下面
+    for (const n of T.nodes) if (!n.frame) (n.ic ? drawIconNode : drawPill)(c, n, pal, 0);
   } else drawPill(c, T.root, pal, 0);
   if (full && T.strip) {                                    // 源码条的底板（字每帧画）
     const st = T.strip;
@@ -363,7 +447,14 @@ function commit(fromEmpty) {
   renderCache(Lc[cur], true);
   old = STILL ? -1 : from; morphT0 = now; cacheOK = true;
   if (paused) { old = -1; draw(now); }
+  // 树或配色变了：窗口边缘效果按新的树和配色重画（它把窗口接到最近的节点上）
+  if (window.DesklandWindowEffects) window.DesklandWindowEffects.configure({});
 }
+// 给窗口边缘效果（share.js）用：当前配色和树的节点
+window.DesklandFxHook = () => {
+  const pal = PALS[P.palette];
+  return { pal, glow: pal.soft, halo: pal.frame, nodes: T ? T.nodes : [], root: T ? T.root : null };
+};
 
 /* ======================================================================
    解析动画：按系统时钟分成一轮一轮，每轮从 Program 出发，先序遍历点亮节点
@@ -389,7 +480,7 @@ function drawParse(t) {
     if (since < 0) { if (n.edge) dot(n.edge, clamp(1 + since * glowP, 0, 1), pal); continue; }   // 光正沿树枝走过来
     if (since > GLOW) continue;
     const hi = since < 0.25 ? since / 0.25 : 1 - (since - 0.25) / (GLOW - 0.25);
-    (n.ic ? drawIconNode : drawPill)(ctx, n, pal, clamp(hi, 0, 1));
+    (n.ic ? drawIconNode : n.frame ? drawGroup : drawPill)(ctx, n, pal, clamp(hi, 0, 1));
   }
   // 源码条：当前的词高亮，前后各几个词
   if (T.strip) {

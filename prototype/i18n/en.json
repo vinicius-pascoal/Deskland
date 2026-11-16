@@ -499,6 +499,14 @@
             "Show"
           ]
         },
+        "groups": {
+          "label": "Icon groups",
+          "hint": "Recognize icons that sit together and draw each group as one code block: a column is a function, a row is an array, a cluster is a class",
+          "options": [
+            "Off",
+            "On"
+          ]
+        },
         "speed": {
           "label": "Parse speed",
           "hint": "How fast the parser lights up nodes"
