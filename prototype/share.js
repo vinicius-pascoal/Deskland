@@ -36,14 +36,15 @@
       position: absolute; display: block; box-sizing: border-box; pointer-events: none;
       border: 1px solid var(--fx-border); border-radius: var(--fx-radius);
       box-shadow: 0 0 7px 1px var(--fx-glow), 0 0 18px 2px var(--fx-halo);
-      animation-duration: 2.8s; animation-timing-function: ease-in-out; animation-iteration-count: infinite;
-      will-change: opacity;
     }
+    /* O retângulo do tamanho da janela é estático (pintado uma vez numa só camada); só faixas finas
+       e detalhes pequenos nas bordas são animados, cada um vira uma camada pequena no compositor. */
     #deskland-window-effects > i::before,
     #deskland-window-effects > i::after { content: ''; position: absolute; pointer-events: none; }
+    #deskland-window-effects.paused > i::before,
+    #deskland-window-effects.paused > i::after { animation-play-state: paused; }
 
     /* Praia: espuma baixa sob a janela e um reflexo que corre na horizontal. */
-    #deskland-window-effects > i.fx-beach { animation-name: deskland-window-fx-beach; }
     .fx-beach::before {
       left: 6%; right: 6%; bottom: -7px; height: 6px; border-radius: 50%; filter: blur(1px);
       background: radial-gradient(ellipse at 15% 50%, rgba(224,255,249,.75) 0 8%, transparent 20%),
@@ -58,7 +59,6 @@
     }
 
     /* Prado: halo difuso, pequena sombra no chão e movimento orgânico. */
-    #deskland-window-effects > i.fx-meadow { animation-name: deskland-window-fx-meadow; }
     .fx-meadow { box-shadow: 0 5px 16px 2px rgba(54,126,56,.28), 0 0 18px 2px var(--fx-halo); }
     .fx-meadow::before {
       left: 5%; right: 5%; bottom: -10px; height: 12px; border-radius: 50%; filter: blur(4px);
@@ -66,26 +66,26 @@
       animation: deskland-window-fx-shadow 3.8s ease-in-out infinite;
     }
     .fx-meadow::after {
-      inset: -7px; border: 1px dotted rgba(223,246,155,.25); border-radius: var(--fx-radius);
+      left: 6%; right: 6%; top: -7px; height: 0; border-top: 1px dotted rgba(223,246,155,.55);
       animation: deskland-window-fx-pollen 5s ease-in-out infinite;
     }
 
-    /* Espaço: nebulosa suave e partículas estelares lentas. */
-    #deskland-window-effects > i.fx-space { animation-name: deskland-window-fx-space; }
+    /* Espaço: faixa de estrelas sobre a janela e um arco orbital pequeno no canto. */
     .fx-space::before {
-      inset: -15px; border-radius: 50%; filter: blur(5px); opacity: .48;
-      background: radial-gradient(circle at 18% 30%, rgba(241,224,255,.8) 0 2%, transparent 7%),
-                  radial-gradient(circle at 72% 68%, rgba(147,197,253,.7) 0 1.5%, transparent 6%),
-                  radial-gradient(ellipse at 45% 45%, rgba(139,92,246,.24), transparent 68%);
+      left: 4%; right: 4%; top: -14px; height: 12px; border-radius: 50%; filter: blur(1px);
+      background: radial-gradient(circle at 18% 50%, rgba(241,224,255,.85) 0 1.5px, transparent 3px),
+                  radial-gradient(circle at 52% 30%, rgba(147,197,253,.75) 0 1px, transparent 2.5px),
+                  radial-gradient(circle at 81% 60%, rgba(241,224,255,.7) 0 1px, transparent 2.5px),
+                  radial-gradient(ellipse at 50% 60%, rgba(139,92,246,.22), transparent 70%);
       animation: deskland-window-fx-stars 6s ease-in-out infinite;
     }
     .fx-space::after {
-      inset: -6px; border: 1px solid rgba(207,190,255,.2); border-radius: 50%;
-      transform: scaleX(1.04); animation: deskland-window-fx-orbit 5s linear infinite;
+      right: -9px; top: -9px; width: 18px; height: 18px; border-radius: 50%;
+      border: 1px solid transparent; border-top-color: rgba(207,190,255,.7); border-right-color: rgba(147,197,253,.45);
+      animation: deskland-window-fx-orbit 5s linear infinite;
     }
 
     /* Escrivaninha: sombra quente abaixo e faixa de luz de uma lâmpada. */
-    #deskland-window-effects > i.fx-desk { animation-name: deskland-window-fx-desk; }
     .fx-desk { box-shadow: 0 8px 18px 3px rgba(131,73,30,.26), 0 0 12px 1px var(--fx-glow); }
     .fx-desk::before {
       left: 4%; right: 4%; bottom: -13px; height: 17px; border-radius: 50%; filter: blur(5px);
@@ -99,7 +99,6 @@
     }
 
     /* Editor e terminal: linhas de varredura discretas, sem transformar a borda em neon forte. */
-    #deskland-window-effects > i.fx-ide { animation-name: deskland-window-fx-ide; }
     .fx-ide::before, .fx-terminal::before {
       left: -18%; width: 24%; top: -3px; height: 2px; border-radius: 2px; filter: blur(.5px);
       background: linear-gradient(90deg, transparent, var(--fx-border), transparent);
@@ -109,78 +108,56 @@
       top: 9%; bottom: 9%; left: -3px; width: 2px; background: var(--fx-glow); filter: blur(.5px);
       animation: deskland-window-fx-cursor 1.8s steps(2, end) infinite;
     }
-    #deskland-window-effects > i.fx-terminal { animation-name: deskland-window-fx-terminal; }
     .fx-terminal { border-radius: var(--fx-radius); box-shadow: 0 0 6px 1px var(--fx-glow), 0 0 15px 1px var(--fx-halo); }
     .fx-terminal::after {
-      left: 4%; right: 4%; top: 31%; height: 1px; background: rgba(154,255,177,.5); opacity: .4;
-      animation: deskland-window-fx-scanline 2.2s linear infinite;
+      top: 12%; bottom: 12%; right: -4px; width: 2px; background: rgba(154,255,177,.6); filter: blur(.5px);
+      animation: deskland-window-fx-cursor 1.2s steps(2, end) infinite;
     }
 
     /* Git, árvore e dashboard: pulsos curtos que lembram nós, conexões e telemetria. */
-    #deskland-window-effects > i.fx-gitgraph { animation-name: deskland-window-fx-git; border-style: dashed; }
-    .fx-gitgraph::before { inset: -6px; border: 1px solid rgba(88,166,255,.22); border-radius: 50%; animation: deskland-window-fx-node 2.5s ease-out infinite; }
+    .fx-gitgraph::before { right: -6px; top: -6px; width: 12px; height: 12px; border: 1px solid rgba(88,166,255,.6); border-radius: 50%; animation: deskland-window-fx-node 2.5s ease-out infinite; }
     .fx-gitgraph::after { left: 15%; right: 15%; top: -3px; height: 2px; background: linear-gradient(90deg, #f778ba, #58a6ff, #7ee787); animation: deskland-window-fx-data 2.4s linear infinite; }
-    #deskland-window-effects > i.fx-ast { animation-name: deskland-window-fx-ast; border-style: dotted; }
     .fx-ast::before { left: 14%; right: 14%; top: -5px; height: 8px; background: radial-gradient(circle, rgba(217,72,15,.7) 0 2px, transparent 3px) 0 50% / 16px 8px repeat-x; animation: deskland-window-fx-node 3s ease-in-out infinite; }
-    .fx-ast::after { inset: -5px; border-left: 1px solid rgba(200,191,172,.28); border-right: 1px solid rgba(200,191,172,.28); animation: deskland-window-fx-branch 3.6s ease-in-out infinite; }
-    #deskland-window-effects > i.fx-dashboard { animation-name: deskland-window-fx-dashboard; }
-    .fx-dashboard::before { inset: -4px; border: 2px solid transparent; border-top-color: rgba(87,148,242,.75); border-right-color: rgba(115,191,105,.5); border-radius: 50%; animation: deskland-window-fx-meter 2.1s linear infinite; }
+    .fx-ast::after { top: 8%; bottom: 8%; left: -5px; width: 1px; background: rgba(200,191,172,.5); animation: deskland-window-fx-branch 3.6s ease-in-out infinite; }
+    .fx-dashboard::before { right: 8px; top: -9px; width: 14px; height: 14px; border: 2px solid transparent; border-top-color: rgba(87,148,242,.85); border-right-color: rgba(115,191,105,.6); border-radius: 50%; animation: deskland-window-fx-meter 2.1s linear infinite; }
     .fx-dashboard::after { left: 8%; right: 8%; bottom: -4px; height: 2px; background: linear-gradient(90deg, #2c4f8f, #5794f2, #fade2a, #5794f2); opacity: .6; animation: deskland-window-fx-data 2.8s linear infinite; }
 
     /* Lago e cidade: ondulação elíptica e traços de chuva/neon. */
-    #deskland-window-effects > i.fx-pond { animation-name: deskland-window-fx-pond; }
     .fx-pond::before, .fx-pond::after { left: 15%; right: 15%; bottom: -10px; height: 16px; border: 1px solid rgba(171,244,218,.5); border-radius: 50%; }
     .fx-pond::before { animation: deskland-window-fx-ripple 3.2s ease-out infinite; }
     .fx-pond::after { animation: deskland-window-fx-ripple 3.2s .9s ease-out infinite; }
-    #deskland-window-effects > i.fx-nightcity { animation-name: deskland-window-fx-nightcity; }
-    .fx-nightcity::before { inset: -8px; background: repeating-linear-gradient(112deg, transparent 0 16px, rgba(61,224,255,.2) 17px 18px, transparent 19px 32px); opacity: .45; animation: deskland-window-fx-rain 2.4s linear infinite; }
+    .fx-nightcity::before { left: 2%; right: 2%; top: -16px; height: 13px; background: repeating-linear-gradient(112deg, transparent 0 16px, rgba(61,224,255,.35) 17px 18px, transparent 19px 32px); opacity: .55; animation: deskland-window-fx-rain 1.6s linear infinite; }
     .fx-nightcity::after { left: 8%; right: 8%; bottom: -5px; height: 3px; background: linear-gradient(90deg, #ff3d7f, #ffd58a, #3de0ff); filter: blur(1px); animation: deskland-window-fx-neon 2.1s ease-in-out infinite; }
 
     /* ASCII City: letreiros de fachada e linhas de tráfego entre os prédios. */
-    #deskland-window-effects > i.fx-ascii-city { animation-name: deskland-window-fx-ascii-city; border-style: solid; }
     .fx-ascii-city::before { left: 8%; right: 8%; bottom: -5px; height: 2px; background: repeating-linear-gradient(90deg, rgba(114,246,255,.15) 0 5px, rgba(255,95,190,.78) 6px 10px, transparent 11px 18px); animation: deskland-window-fx-ascii-data 2.3s linear infinite; }
-    .fx-ascii-city::after { inset: -4px; border: 1px dotted rgba(114,246,255,.32); animation: deskland-window-fx-ascii-scan 3.6s ease-in-out infinite; }
+    .fx-ascii-city::after { left: 4%; right: 4%; top: -4px; height: 0; border-top: 1px dotted rgba(114,246,255,.6); animation: deskland-window-fx-ascii-scan 3.6s ease-in-out infinite; }
 
     /* ASCII Starship Bridge: pulsos de casco e arco de alerta ao redor do setor. */
-    #deskland-window-effects > i.fx-ascii-starship { animation-name: deskland-window-fx-ascii-starship; border-style: double; }
-    .fx-ascii-starship::before { inset: -7px; border: 1px solid rgba(122,167,255,.46); border-radius: 50%; animation: deskland-window-fx-ascii-orbit 4.4s linear infinite; }
+    .fx-ascii-starship::before { left: -9px; top: -9px; width: 18px; height: 18px; border: 1px solid transparent; border-top-color: rgba(122,167,255,.8); border-left-color: rgba(194,156,255,.5); border-radius: 50%; animation: deskland-window-fx-ascii-orbit 4.4s linear infinite; }
     .fx-ascii-starship::after { left: 14%; right: 14%; top: -4px; height: 3px; background: linear-gradient(90deg, transparent, rgba(255,95,190,.85), rgba(169,240,255,.9), transparent); animation: deskland-window-fx-ascii-pulse 1.9s ease-in-out infinite; }
 
-    @keyframes deskland-window-fx-beach { 0%,100% { opacity: .55; } 50% { opacity: .9; } }
     @keyframes deskland-window-fx-foam { 0%,100% { transform: scaleX(.86); opacity: .55; } 50% { transform: scaleX(1); opacity: .9; } }
     @keyframes deskland-window-fx-shimmer { from { transform: translateX(-20%); } to { transform: translateX(480%); } }
-    @keyframes deskland-window-fx-meadow { 0%,100% { opacity: .5; } 50% { opacity: .82; } }
     @keyframes deskland-window-fx-shadow { 0%,100% { transform: scaleX(.86); opacity: .55; } 50% { transform: scaleX(1.05); opacity: .8; } }
-    @keyframes deskland-window-fx-pollen { 0%,100% { opacity: .2; transform: scale(.98); } 50% { opacity: .52; transform: scale(1.02); } }
-    @keyframes deskland-window-fx-space { 0%,100% { opacity: .48; } 50% { opacity: .86; } }
-    @keyframes deskland-window-fx-stars { 0%,100% { transform: translate(0,0); opacity: .35; } 50% { transform: translate(4px,-2px); opacity: .7; } }
-    @keyframes deskland-window-fx-orbit { to { transform: scaleX(1.04) rotate(360deg); } }
-    @keyframes deskland-window-fx-desk { 0%,100% { opacity: .48; } 50% { opacity: .78; } }
+    @keyframes deskland-window-fx-pollen { 0%,100% { opacity: .25; transform: scaleX(.97); } 50% { opacity: .7; transform: scaleX(1.02); } }
+    @keyframes deskland-window-fx-stars { 0%,100% { transform: translate(0,0); opacity: .35; } 50% { transform: translate(4px,-2px); opacity: .75; } }
+    @keyframes deskland-window-fx-orbit { to { transform: rotate(360deg); } }
     @keyframes deskland-window-fx-lamp { 0%,100% { opacity: .35; transform: scaleX(.7); } 50% { opacity: .8; transform: scaleX(1); } }
-    @keyframes deskland-window-fx-ide { 0%,100% { opacity: .42; } 45% { opacity: .9; } 52% { opacity: .58; } 60% { opacity: .86; } }
-    @keyframes deskland-window-fx-terminal { 0%,100% { opacity: .45; } 50% { opacity: .85; } }
     @keyframes deskland-window-fx-scan { from { transform: translateX(0); } to { transform: translateX(500%); } }
     @keyframes deskland-window-fx-cursor { 0%,45% { opacity: .2; } 50%,100% { opacity: .75; } }
-    @keyframes deskland-window-fx-scanline { from { transform: translateY(-20px); } to { transform: translateY(120px); } }
-    @keyframes deskland-window-fx-git { 0%,100% { opacity: .42; } 45% { opacity: .95; } 56% { opacity: .55; } }
-    @keyframes deskland-window-fx-ast { 0%,100% { opacity: .38; } 50% { opacity: .78; } }
-    @keyframes deskland-window-fx-dashboard { 0%,100% { opacity: .42; } 50% { opacity: .86; } }
     @keyframes deskland-window-fx-node { 0%,100% { transform: scale(.94); opacity: .15; } 50% { transform: scale(1.04); opacity: .65; } }
-    @keyframes deskland-window-fx-data { from { background-position: 0 0; transform: translateX(-8%); } to { background-position: 100px 0; transform: translateX(8%); } }
+    @keyframes deskland-window-fx-data { from { transform: translateX(-8%); } to { transform: translateX(8%); } }
     @keyframes deskland-window-fx-branch { 0%,100% { transform: scaleY(.82); opacity: .2; } 50% { transform: scaleY(1); opacity: .58; } }
     @keyframes deskland-window-fx-meter { to { transform: rotate(360deg); } }
-    @keyframes deskland-window-fx-pond { 0%,100% { opacity: .45; } 50% { opacity: .82; } }
     @keyframes deskland-window-fx-ripple { 0% { transform: scaleX(.65); opacity: .65; } 100% { transform: scaleX(1.2) translateY(5px); opacity: 0; } }
-    @keyframes deskland-window-fx-nightcity { 0%,100% { opacity: .42; } 45% { opacity: .95; } 52% { opacity: .58; } 60% { opacity: .9; } }
-    @keyframes deskland-window-fx-rain { from { transform: translateY(-18px); } to { transform: translateY(24px); } }
+    @keyframes deskland-window-fx-rain { from { transform: translateX(-8px); } to { transform: translateX(8px); } }
     @keyframes deskland-window-fx-neon { 0%,100% { opacity: .3; transform: scaleX(.7); } 50% { opacity: .9; transform: scaleX(1); } }
-    @keyframes deskland-window-fx-ascii-city { 0%,100% { opacity: .5; } 45% { opacity: .95; } 55% { opacity: .62; } }
     @keyframes deskland-window-fx-ascii-data { from { transform: translateX(-18%); } to { transform: translateX(18%); } }
-    @keyframes deskland-window-fx-ascii-scan { 0%,100% { opacity: .18; transform: scaleX(.98); } 50% { opacity: .7; transform: scaleX(1.02); } }
-    @keyframes deskland-window-fx-ascii-starship { 0%,100% { opacity: .52; } 50% { opacity: .98; } }
+    @keyframes deskland-window-fx-ascii-scan { 0%,100% { opacity: .25; transform: scaleX(.98); } 50% { opacity: .8; transform: scaleX(1.02); } }
     @keyframes deskland-window-fx-ascii-orbit { to { transform: rotate(360deg) scaleX(1.05); } }
     @keyframes deskland-window-fx-ascii-pulse { 0%,100% { opacity: .25; transform: scaleX(.65); } 50% { opacity: .95; transform: scaleX(1); } }
-    @media (prefers-reduced-motion: reduce) { #deskland-window-effects > i { animation: none; } }
+    @media (prefers-reduced-motion: reduce) { #deskland-window-effects > i::before, #deskland-window-effects > i::after { animation: none; } }
   `;
   document.head.appendChild(style);
   const layer = document.createElement('div');
@@ -215,6 +192,8 @@
   };
   window.DesklandWindowEffects = api;
 
+  // EnumWindows vem de cima para baixo na ordem Z: as primeiras são as janelas mais à frente.
+  const MAX_WINDOWS = 12;
   let last = null;
   function render() {
     layer.innerHTML = '';
@@ -226,7 +205,7 @@
     layer.style.setProperty('--fx-glow', activeProfile.glow);
     layer.style.setProperty('--fx-halo', activeProfile.halo);
     layer.style.setProperty('--fx-radius', activeProfile.radius);
-    for (let i = 0; i < Math.min(api.rects.length, 48); i++) {
+    for (let i = 0; i < Math.min(api.rects.length, MAX_WINDOWS); i++) {
       const r = api.rects[i];
       if (!Array.isArray(r) || r.length < 4) continue;
       const x = Number(r[0]) / k, y = Number(r[1]) / k;
@@ -245,6 +224,9 @@
     if (!m) return;
     if (m.t === 'windows') { last = m; api.setWindows(m.r); }
     else if (m.t === 'settings') api.applySettings(m.v);
+    // Wallpaper pausado (janela maximizada / tela cheia / pausa manual): congela as animações para o
+    // compositor parar de trabalhar. No preview o tema ignora a pausa, então aqui também.
+    else if (m.t === 'pause' && wall) layer.classList.toggle('paused', !!m.v);
     else if (m.t === 'reset') api.applySettings(DEFAULTS);
   }
     if (wall && window.chrome && window.chrome.webview) {

@@ -1549,7 +1549,9 @@ class WallpaperForm : Form
     // 挡住桌面的窗口：前台窗口按原来的规则（铺满或最大化）；其他窗口只认普通的应用窗口——
     // 工具窗口、点击穿透、分层（半透明叠加层）、不激活的窗口都跳过，宁可少停也不要把壁纸误停住。
     // 这样一个显示器上有窗口最大化、焦点在另一个显示器上时，被挡住的那个照样暂停。
-    struct Blocker { public Native.RECT R; public bool Zoomed; public string Cls; }
+    // R：GetWindowRect（含 Win10/11 左右下约 7px 的不可见缩放边框），用来判断最大化 / 全屏；
+    // Frame：DWMWA_EXTENDED_FRAME_BOUNDS，窗口真正看得见的边，窗口效果贴着它画。
+    struct Blocker { public Native.RECT R; public Native.RECT Frame; public bool Zoomed; public string Cls; }
     static List<Blocker> blockers;
     static int blockersAt;
     static List<Blocker> Blockers()
@@ -1575,7 +1577,10 @@ class WallpaperForm : Form
             }
             Native.RECT r;
             if (!Native.GetWindowRect(h, out r)) return true;
-            list.Add(new Blocker { R = r, Zoomed = Native.IsZoomed(h), Cls = c });
+            Native.RECT fr;
+            if (Native.DwmGetWindowAttribute(h, 9 /* DWMWA_EXTENDED_FRAME_BOUNDS */, out fr, Marshal.SizeOf(typeof(Native.RECT))) != 0
+                || fr.Right <= fr.Left || fr.Bottom <= fr.Top) fr = r;
+            list.Add(new Blocker { R = r, Frame = fr, Zoomed = Native.IsZoomed(h), Cls = c });
             return true;
         }, IntPtr.Zero);
         blockers = list; blockersAt = now;
@@ -1594,6 +1599,7 @@ class WallpaperForm : Form
             Native.RECT wr = b.R;
             bool covers = wr.Left <= screen.Left && wr.Top <= screen.Top && wr.Right >= screen.Right && wr.Bottom >= screen.Bottom;
             if (covers) continue;                              // 无边框全屏窗口也不应被当成普通窗口
+            wr = b.Frame;                                      // 光效贴着看得见的边，不留不可见边框那 7px 的缝
             Rectangle clipped = Rectangle.Intersect(screen, Rectangle.FromLTRB(wr.Left, wr.Top, wr.Right, wr.Bottom));
             if (clipped.Width < 8 || clipped.Height < 8) continue;
             if (n++ > 0) sb.Append(',');
@@ -2070,6 +2076,7 @@ static class Native
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll")] public static extern bool RedrawWindow(IntPtr h, IntPtr rect, IntPtr rgn, uint flags);
     [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attribute, out int value, int size);
+    [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attribute, out RECT value, int size);
     [DllImport("kernel32.dll")] public static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
     [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr h);
     [DllImport("kernel32.dll")] public static extern IntPtr VirtualAllocEx(IntPtr proc, IntPtr addr, IntPtr size, uint type, uint protect);
